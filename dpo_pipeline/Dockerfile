@@ -29,6 +29,7 @@ RUN TORCH_VER=$(python -c "import torch; print(torch.__version__)") && \
 # ======================== Environment variables ==============================
 ENV HF_HOME=/data-1/.cache/huggingface
 ENV HF_HUB_CACHE=/data-1/.cache/huggingface
+ENV HF_HUB_OFFLINE=1
 
 WORKDIR /workspace
 CMD ["bash"]
