@@ -1,0 +1,58 @@
+{
+  "experiment": "Qwen3-8B Preference Data Generation (Milestone 5)",
+  "model": "Qwen/Qwen3-8B-Base",
+  "date": "2026-04-05",
+  "output_file": "/data-1/dataset/dpo-8b-pairs.jsonl",
+  "pipeline": {
+    "prompts_extracted": 2000,
+    "prompt_offset": 1200,
+    "rollouts_per_prompt": 16,
+    "total_rollouts": 32000,
+    "rollouts_correct": 22862,
+    "rollouts_incorrect": 8527,
+    "filtered_no_think_tags": 592,
+    "filtered_no_complete_answer": 19,
+    "filtered_answer_not_verified_incorrect": 0,
+    "pairs_before_cleanup": 8347,
+    "pairs_removed_by_cleanup": 413,
+    "pairs_removed_by_math_verify": 0,
+    "pairs_removed_by_regex": 413,
+    "pairs_after_cleanup": 7934,
+    "prompts_with_pairs": 1319,
+    "rollout_time_seconds": 5897.0,
+    "strict_filtering": true
+  },
+  "final_dataset": {
+    "total_pairs": 7934,
+    "duplicates": 0,
+    "structural_issues": 0,
+    "rejected_without_think_tags": 0,
+    "rejected_without_extractable_answer": 0,
+    "rejected_with_empty_think_content": 0,
+    "format": "TRL chat format (prompt=[system, user], chosen=[assistant], rejected=[assistant])"
+  },
+  "strict_filtering_details": {
+    "description": "All rejected responses verified to have: (1) complete <think>...</think> tags with non-empty reasoning, (2) complete extractable answer (\\boxed{} or <answer> tags), (3) answer verified incorrect by dual-layer verification (math_verify + regex)",
+    "normalization": "Base model rollouts that produce <think>...<answer> or <think>...\\boxed{} without </think> are normalized by inserting </think> at the appropriate boundary before filtering",
+    "think_tag_filter_rate_pct": 1.85,
+    "answer_completeness_filter_rate_pct": 0.06,
+    "cleanup_removal_rate_pct": 4.95
+  },
+  "verification": {
+    "spot_check_sample_size": 20,
+    "spot_check_seed": 42,
+    "dual_layer_verification": "math_verify (primary) + regex (fallback + post-cleanup)"
+  },
+  "config": {
+    "max_tokens": 4096,
+    "temperature": 0.7,
+    "top_p": 0.95,
+    "tensor_parallel_size": 1,
+    "gpu_memory_utilization": 0.9,
+    "dtype": "bfloat16"
+  },
+  "docker": {
+    "image": "dpo-harness",
+    "gpu": "NVIDIA A800-SXM4-80GB (device=0)"
+  }
+}

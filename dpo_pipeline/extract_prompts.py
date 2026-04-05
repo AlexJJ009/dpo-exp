@@ -60,9 +60,16 @@ def extract_from_sample(sample: dict) -> dict | None:
         return None
 
     # Build chat template matching AIME-2025 format
+    # Check if user_content already has the boxed suffix (source dataset was updated
+    # during the Human Review Gate after Milestone 4 to include it)
+    if "\\boxed{}" in user_content:
+        final_user_content = user_content
+    else:
+        final_user_content = user_content + USER_SUFFIX
+
     prompt = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_content + USER_SUFFIX},
+        {"role": "user", "content": final_user_content},
     ]
 
     return {

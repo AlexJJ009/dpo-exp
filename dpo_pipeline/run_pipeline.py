@@ -57,6 +57,10 @@ def main():
     parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature")
     parser.add_argument("--tensor-parallel-size", type=int, default=1, help="TP size for vLLM")
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9, help="GPU mem util")
+    parser.add_argument("--strict", action="store_true",
+                        help="Enable strict rejected response filtering (think tags, answer completeness)")
+    parser.add_argument("--offset", type=int, default=None,
+                        help="Offset for prompt extraction (skip N valid samples)")
     args = parser.parse_args()
 
     extracted_path = os.path.join(DATASET_DIR, f"{args.output_prefix}-extracted.jsonl")
@@ -66,11 +70,19 @@ def main():
     start = time.time()
 
     # Step 1: Extract prompts
-    extract_cmd = [
-        sys.executable, os.path.join(SCRIPT_DIR, "extract_prompts.py"),
-        "--input", SOURCE_DATA,
-        "--output", extracted_path,
-    ]
+    if args.offset is not None:
+        extract_cmd = [
+            sys.executable, os.path.join(SCRIPT_DIR, "extract_prompts_offset.py"),
+            "--input", SOURCE_DATA,
+            "--output", extracted_path,
+            "--offset", str(args.offset),
+        ]
+    else:
+        extract_cmd = [
+            sys.executable, os.path.join(SCRIPT_DIR, "extract_prompts.py"),
+            "--input", SOURCE_DATA,
+            "--output", extracted_path,
+        ]
     if args.limit is not None:
         extract_cmd.extend(["--limit", str(args.limit)])
     run_step("Extract prompts from source dataset", extract_cmd)
@@ -95,6 +107,8 @@ def main():
         "--input", rollouts_path,
         "--output", pairs_path,
     ]
+    if args.strict:
+        pairs_cmd.append("--strict")
     run_step("Build preference pairs", pairs_cmd)
 
     elapsed = time.time() - start
