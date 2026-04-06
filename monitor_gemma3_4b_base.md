@@ -30,7 +30,7 @@ tmux session `gemma3-4b-base` 中正在运行一个 Gemma3-4B-PT DPO 全流程 p
 | 1/4 | dpo-harness | 偏好对生成 (1200 prompts x 16 rollouts, --strict) | ~30-60min |
 | 2/4 | dpo-harness | clean_pairs 二次验证 | ~2-5min |
 | 3/4 | dpo-harness | DPO 训练 (DeepSpeed ZeRO 2, 8 GPUs, ~40 steps) | ~20-40min |
-| 4/4 | verl-harness | 7 benchmark 评测 (n=3) | ~20-30min |
+| 4/4 | verl-harness (PYTHONPATH=/data-1/verl07/verl) | 7 benchmark 评测 (n=3) | ~20-30min |
 
 ## 检查步骤
 

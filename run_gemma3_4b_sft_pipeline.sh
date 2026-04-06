@@ -159,10 +159,10 @@ echo ""
 
 docker run --rm --gpus all --ipc=host \
   -v /data-1:/data-1 \
+  -e PYTHONPATH=/data-1/verl07/verl \
+  -w /data-1/verl07/verl \
   verl-harness:latest \
-  bash -c "
-    cd /data-1/verl07/verl && \
-    python recipe/joint_training/offline_eval.py \
+  python recipe/joint_training/offline_eval.py \
       --model_path ${CHECKPOINT_DIR} \
       --test_files \
         /data-1/dataset/MATH-500/math500-test_with_system_prompt.parquet \
@@ -179,7 +179,6 @@ docker run --rm --gpus all --ipc=host \
       --max_tokens ${EVAL_MAX_TOKENS} \
       --gpu_memory_utilization 0.85 \
       --output_dir ${EVAL_OUTPUT_DIR}
-  "
 
 echo ""
 echo ">>> Step 4 complete: evaluation results saved to ${EVAL_OUTPUT_DIR}"
