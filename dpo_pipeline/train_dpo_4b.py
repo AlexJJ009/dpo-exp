@@ -1,7 +1,7 @@
 """
 DPO Training script for Qwen3-4B-Base using TRL's DPOTrainer.
 
-Trains on preference pairs from /data-1/dataset/dpo-4b-pairs.jsonl
+Trains on preference pairs from /data-1/dataset/dpo/dpo-4b/dpo-4b-pairs.jsonl
 and saves checkpoint to /data-1/checkpoints/qwen3-4b-dpo/.
 
 Usage (inside dpo-harness Docker container):
@@ -21,7 +21,7 @@ from trl import DPOConfig, DPOTrainer
 
 # ======================== Configuration ========================
 MODEL_NAME = "Qwen/Qwen3-4B-Base"
-DATASET_PATH = "/data-1/dataset/dpo-4b-pairs.jsonl"
+DATASET_PATH = "/data-1/dataset/dpo/dpo-4b/dpo-4b-pairs.jsonl"
 OUTPUT_DIR = "/data-1/checkpoints/qwen3-4b-dpo"
 LOG_DIR = "/data-1/checkpoints/qwen3-4b-dpo/training_logs"
 

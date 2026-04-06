@@ -27,24 +27,24 @@ Source Dataset
 │ Extract Prompts  │  extract_prompts.py / extract_prompts_offset.py
 │ (parse JSONL)    │
 └────────┬────────┘
-         │  {output-prefix}-extracted.jsonl
+         │  dpo/{output-prefix}/{output-prefix}-extracted.jsonl
          ▼
 ┌─────────────────┐
 │ Batch Rollout    │  batch_rollout.py (vLLM inference)
 │ (N responses/    │
 │  prompt)         │
 └────────┬────────┘
-         │  {output-prefix}-rollouts.jsonl
+         │  dpo/{output-prefix}/{output-prefix}-rollouts.jsonl
          ▼
 ┌─────────────────┐
 │ Build Pairs      │  build_pairs.py (verify answers, pair correct vs incorrect)
 └────────┬────────┘
-         │  {output-prefix}-pairs.jsonl
+         │  dpo/{output-prefix}/{output-prefix}-pairs.jsonl
          ▼
 ┌─────────────────┐
 │ Clean Pairs      │  clean_pairs.py (re-verify rejected responses)
 └────────┬────────┘
-         │  {output-prefix}-pairs.jsonl (cleaned, in-place)
+         │  dpo/{output-prefix}/{output-prefix}-pairs.jsonl (cleaned, in-place)
          ▼
 ┌─────────────────┐
 │ DPO Train        │  train_dpo_{size}.py (TRL DPOTrainer)
@@ -132,18 +132,20 @@ python dpo_pipeline/run_pipeline.py \
 
 ### Output Files
 
-All output files are written to `/data-1/dataset/` with the naming convention:
+All DPO output files are written to `/data-1/dataset/dpo/{output-prefix}/`, organized by prefix in subdirectories under the `dpo/` directory:
 
 | File | Contents |
 |---|---|
-| `{output-prefix}-extracted.jsonl` | Extracted prompts with reference answers |
-| `{output-prefix}-rollouts.jsonl` | Multiple model responses per prompt |
-| `{output-prefix}-pairs.jsonl` | DPO preference pairs (chosen vs rejected) |
+| `{output-prefix}/{output-prefix}-extracted.jsonl` | Extracted prompts with reference answers |
+| `{output-prefix}/{output-prefix}-rollouts.jsonl` | Multiple model responses per prompt |
+| `{output-prefix}/{output-prefix}-pairs.jsonl` | DPO preference pairs (chosen vs rejected) |
 
 For example, `--output-prefix dpo-4b` produces:
-- `/data-1/dataset/dpo-4b-extracted.jsonl`
-- `/data-1/dataset/dpo-4b-rollouts.jsonl`
-- `/data-1/dataset/dpo-4b-pairs.jsonl`
+- `/data-1/dataset/dpo/dpo-4b/dpo-4b-extracted.jsonl`
+- `/data-1/dataset/dpo/dpo-4b/dpo-4b-rollouts.jsonl`
+- `/data-1/dataset/dpo/dpo-4b/dpo-4b-pairs.jsonl`
+
+The pipeline script (`run_pipeline.py`) uses `DPO_DIR = os.path.join(DATASET_DIR, "dpo")` and creates output in `os.path.join(DPO_DIR, args.output_prefix)`, automatically creating the subdirectory if it does not exist.
 
 ### Using `--offset` to Avoid Prompt Overlap
 
@@ -181,9 +183,9 @@ After generating pairs, run `clean_pairs.py` to catch false negatives — cases 
 
 ```bash
 python dpo_pipeline/clean_pairs.py \
-  --pairs /data-1/dataset/dpo-4b-pairs.jsonl \
-  --extracted /data-1/dataset/dpo-4b-extracted.jsonl \
-  --output /data-1/dataset/dpo-4b-pairs.jsonl
+  --pairs /data-1/dataset/dpo/dpo-4b/dpo-4b-pairs.jsonl \
+  --extracted /data-1/dataset/dpo/dpo-4b/dpo-4b-extracted.jsonl \
+  --output /data-1/dataset/dpo/dpo-4b/dpo-4b-pairs.jsonl
 ```
 
 | Flag | Type | Description |
@@ -226,9 +228,9 @@ python dpo_pipeline/run_pipeline.py \
 
 # Clean the pairs
 python dpo_pipeline/clean_pairs.py \
-  --pairs /data-1/dataset/dpo-custom-pairs.jsonl \
-  --extracted /data-1/dataset/dpo-custom-extracted.jsonl \
-  --output /data-1/dataset/dpo-custom-pairs.jsonl
+  --pairs /data-1/dataset/dpo/dpo-custom/dpo-custom-pairs.jsonl \
+  --extracted /data-1/dataset/dpo/dpo-custom/dpo-custom-extracted.jsonl \
+  --output /data-1/dataset/dpo/dpo-custom/dpo-custom-pairs.jsonl
 ```
 
 ---
@@ -250,7 +252,7 @@ cp dpo_pipeline/train_dpo_4b.py dpo_pipeline/train_dpo_{your_model}.py
 | Constant | Description | Example |
 |---|---|---|
 | `MODEL_NAME` | HuggingFace ID or local path to the base model | `Qwen/Qwen3-4B-Base` or `/data-1/.cache/Qwen3-4B-Base-SFT-stage-1` |
-| `DATASET_PATH` | Path to the preference pairs JSONL | `/data-1/dataset/dpo-4b-pairs.jsonl` |
+| `DATASET_PATH` | Path to the preference pairs JSONL | `/data-1/dataset/dpo/dpo-4b/dpo-4b-pairs.jsonl` |
 | `OUTPUT_DIR` | Directory to save the trained checkpoint | `/data-1/checkpoints/qwen3-4b-dpo` |
 | `LOG_DIR` | Directory for training logs and summary | `/data-1/checkpoints/qwen3-4b-dpo/training_logs` |
 
@@ -497,9 +499,9 @@ docker run --rm --gpus all --ipc=host -v /data-1:/data-1 dpo-harness bash -c '
 # === Step 2: Clean the pairs (inside dpo-harness) ===
 docker run --rm --gpus all --ipc=host -v /data-1:/data-1 dpo-harness bash -c '
   python dpo_pipeline/clean_pairs.py \
-    --pairs /data-1/dataset/dpo-{your-model-short}-pairs.jsonl \
-    --extracted /data-1/dataset/dpo-{your-model-short}-extracted.jsonl \
-    --output /data-1/dataset/dpo-{your-model-short}-pairs.jsonl
+    --pairs /data-1/dataset/dpo/dpo-{your-model-short}/dpo-{your-model-short}-pairs.jsonl \
+    --extracted /data-1/dataset/dpo/dpo-{your-model-short}/dpo-{your-model-short}-extracted.jsonl \
+    --output /data-1/dataset/dpo/dpo-{your-model-short}/dpo-{your-model-short}-pairs.jsonl
 '
 
 # === Step 3: Create and run training script (inside dpo-harness) ===
@@ -557,13 +559,13 @@ Then run `run_pipeline.py` as usual.
 # Extract prompts from custom dataset
 python dpo_pipeline/extract_prompts.py \
   --input /data-1/dataset/{your-dataset}.jsonl \
-  --output /data-1/dataset/custom-extracted.jsonl \
+  --output /data-1/dataset/dpo/custom/custom-extracted.jsonl \
   --limit 2000
 
 # Generate rollouts
 python dpo_pipeline/batch_rollout.py \
-  --input /data-1/dataset/custom-extracted.jsonl \
-  --output /data-1/dataset/custom-rollouts.jsonl \
+  --input /data-1/dataset/dpo/custom/custom-extracted.jsonl \
+  --output /data-1/dataset/dpo/custom/custom-rollouts.jsonl \
   --model Qwen/Qwen3-4B-Base \
   --num-rollouts 16 \
   --max-tokens 4096 \
@@ -573,15 +575,15 @@ python dpo_pipeline/batch_rollout.py \
 
 # Build preference pairs
 python dpo_pipeline/build_pairs.py \
-  --input /data-1/dataset/custom-rollouts.jsonl \
-  --output /data-1/dataset/custom-pairs.jsonl \
+  --input /data-1/dataset/dpo/custom/custom-rollouts.jsonl \
+  --output /data-1/dataset/dpo/custom/custom-pairs.jsonl \
   --strict
 
 # Clean pairs
 python dpo_pipeline/clean_pairs.py \
-  --pairs /data-1/dataset/custom-pairs.jsonl \
-  --extracted /data-1/dataset/custom-extracted.jsonl \
-  --output /data-1/dataset/custom-pairs.jsonl
+  --pairs /data-1/dataset/dpo/custom/custom-pairs.jsonl \
+  --extracted /data-1/dataset/dpo/custom/custom-extracted.jsonl \
+  --output /data-1/dataset/dpo/custom/custom-pairs.jsonl
 ```
 
 ### Recipe C: Run the Pipeline on a Different Model Family
@@ -618,15 +620,15 @@ To adapt the pipeline for a different model family (e.g., Gemma, Llama, Mistral)
 
 | Stage | Script | Input | Output |
 |---|---|---|---|
-| Extract Prompts | `extract_prompts.py` | `/data-1/dataset/EnsembleLLM-data/am_deepseek_r1_filtered_ad.jsonl` | `/data-1/dataset/{prefix}-extracted.jsonl` |
-| Extract (with offset) | `extract_prompts_offset.py` | `/data-1/dataset/EnsembleLLM-data/am_deepseek_r1_filtered_ad.jsonl` | `/data-1/dataset/{prefix}-extracted.jsonl` |
-| Batch Rollout | `batch_rollout.py` | `/data-1/dataset/{prefix}-extracted.jsonl` | `/data-1/dataset/{prefix}-rollouts.jsonl` |
-| Build Pairs | `build_pairs.py` | `/data-1/dataset/{prefix}-rollouts.jsonl` | `/data-1/dataset/{prefix}-pairs.jsonl` |
-| Clean Pairs | `clean_pairs.py` | `/data-1/dataset/{prefix}-pairs.jsonl` + `{prefix}-extracted.jsonl` | `/data-1/dataset/{prefix}-pairs.jsonl` (cleaned) |
+| Extract Prompts | `extract_prompts.py` | `/data-1/dataset/EnsembleLLM-data/am_deepseek_r1_filtered_ad.jsonl` | `/data-1/dataset/dpo/{prefix}/{prefix}-extracted.jsonl` |
+| Extract (with offset) | `extract_prompts_offset.py` | `/data-1/dataset/EnsembleLLM-data/am_deepseek_r1_filtered_ad.jsonl` | `/data-1/dataset/dpo/{prefix}/{prefix}-extracted.jsonl` |
+| Batch Rollout | `batch_rollout.py` | `/data-1/dataset/dpo/{prefix}/{prefix}-extracted.jsonl` | `/data-1/dataset/dpo/{prefix}/{prefix}-rollouts.jsonl` |
+| Build Pairs | `build_pairs.py` | `/data-1/dataset/dpo/{prefix}/{prefix}-rollouts.jsonl` | `/data-1/dataset/dpo/{prefix}/{prefix}-pairs.jsonl` |
+| Clean Pairs | `clean_pairs.py` | `/data-1/dataset/dpo/{prefix}/{prefix}-pairs.jsonl` + `dpo/{prefix}/{prefix}-extracted.jsonl` | `/data-1/dataset/dpo/{prefix}/{prefix}-pairs.jsonl` (cleaned) |
 | Answer Verify | `answer_verify.py` | (utility module, imported by `build_pairs.py` and `clean_pairs.py`) | — |
-| DPO Train (4B) | `train_dpo_4b.py` | `/data-1/dataset/dpo-4b-pairs.jsonl` | `/data-1/checkpoints/qwen3-4b-dpo/` |
-| DPO Train (8B) | `train_dpo_8b.py` | `/data-1/dataset/dpo-8b-pairs.jsonl` | `/data-1/checkpoints/qwen3-8b-dpo/` |
-| DPO Train (4B SFT) | `train_dpo_4b_sft.py` | `/data-1/dataset/dpo-4b-sft-pairs.jsonl` | `/data-1/checkpoints/qwen3-4b-sft-dpo/` |
+| DPO Train (4B) | `train_dpo_4b.py` | `/data-1/dataset/dpo/dpo-4b/dpo-4b-pairs.jsonl` | `/data-1/checkpoints/qwen3-4b-dpo/` |
+| DPO Train (8B) | `train_dpo_8b.py` | `/data-1/dataset/dpo/dpo-8b/dpo-8b-pairs.jsonl` | `/data-1/checkpoints/qwen3-8b-dpo/` |
+| DPO Train (4B SFT) | `train_dpo_4b_sft.py` | `/data-1/dataset/dpo/dpo-4b-sft/dpo-4b-sft-pairs.jsonl` | `/data-1/checkpoints/qwen3-4b-sft-dpo/` |
 | Evaluate | `offline_eval.py` | Model checkpoint + benchmark parquets | `eval_metrics.json` + `eval_details.parquet` |
 
 ### Naming Conventions
@@ -640,14 +642,16 @@ Examples:
 - `/data-1/checkpoints/qwen3-8b-dpo/` — Qwen3-8B-Base DPO
 - `/data-1/checkpoints/qwen3-4b-sft-dpo/` — Qwen3-4B SFT → DPO
 
-**Datasets:**
+**Datasets (DPO intermediate files):**
+
+DPO data is organized under `dpo/{prefix}/` subdirectories, where each prefix gets its own directory containing all intermediate files (extracted prompts, rollouts, and pairs):
 ```
-/data-1/dataset/dpo-{model-short-name}-pairs.jsonl
+/data-1/dataset/dpo/{prefix}/{prefix}-{type}.jsonl
 ```
 Examples:
-- `/data-1/dataset/dpo-4b-pairs.jsonl` — 6,013 preference pairs (Qwen3-4B-Base)
-- `/data-1/dataset/dpo-8b-pairs.jsonl` — 7,934 preference pairs (Qwen3-8B-Base)
-- `/data-1/dataset/dpo-4b-sft-pairs.jsonl` — 5,860 preference pairs (Qwen3-4B-SFT)
+- `/data-1/dataset/dpo/dpo-4b/dpo-4b-pairs.jsonl` — 6,013 preference pairs (Qwen3-4B-Base)
+- `/data-1/dataset/dpo/dpo-8b/dpo-8b-pairs.jsonl` — 7,934 preference pairs (Qwen3-8B-Base)
+- `/data-1/dataset/dpo/dpo-4b-sft/dpo-4b-sft-pairs.jsonl` — 5,860 preference pairs (Qwen3-4B-SFT)
 
 **Evaluation outputs:**
 ```

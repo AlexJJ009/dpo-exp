@@ -17,8 +17,8 @@ Output format is compatible with TRL's DPOTrainer:
 
 Usage:
     python build_pairs.py \
-        --input /data-1/dataset/rollouts.jsonl \
-        --output /data-1/dataset/dpo-8b-pairs.jsonl \
+        --input /data-1/dataset/dpo/dpo-8b/dpo-8b-rollouts.jsonl \
+        --output /data-1/dataset/dpo/dpo-8b/dpo-8b-pairs.jsonl \
         --strict
 """
 

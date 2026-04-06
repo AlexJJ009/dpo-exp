@@ -31,6 +31,7 @@ import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATASET_DIR = "/data-1/dataset"
+DPO_DIR = os.path.join(DATASET_DIR, "dpo")
 SOURCE_DATA = os.path.join(DATASET_DIR, "EnsembleLLM-data", "am_deepseek_r1_filtered_ad.jsonl")
 
 
@@ -65,9 +66,11 @@ def main():
                         help="Use model's tokenizer chat template for prompt formatting (for SFT/chat models)")
     args = parser.parse_args()
 
-    extracted_path = os.path.join(DATASET_DIR, f"{args.output_prefix}-extracted.jsonl")
-    rollouts_path = os.path.join(DATASET_DIR, f"{args.output_prefix}-rollouts.jsonl")
-    pairs_path = os.path.join(DATASET_DIR, f"{args.output_prefix}-pairs.jsonl")
+    output_dir = os.path.join(DPO_DIR, args.output_prefix)
+    os.makedirs(output_dir, exist_ok=True)
+    extracted_path = os.path.join(output_dir, f"{args.output_prefix}-extracted.jsonl")
+    rollouts_path = os.path.join(output_dir, f"{args.output_prefix}-rollouts.jsonl")
+    pairs_path = os.path.join(output_dir, f"{args.output_prefix}-pairs.jsonl")
 
     start = time.time()
 

@@ -2,7 +2,7 @@
   "experiment": "Qwen3-4B Preference Data Generation (Milestone 3)",
   "model": "Qwen/Qwen3-4B-Base",
   "date": "2026-04-04",
-  "output_file": "/data-1/dataset/dpo-4b-pairs.jsonl",
+  "output_file": "/data-1/dataset/dpo/dpo-4b/dpo-4b-pairs.jsonl",
   "pipeline": {
     "batch_1": {
       "prompts_extracted": 1000,

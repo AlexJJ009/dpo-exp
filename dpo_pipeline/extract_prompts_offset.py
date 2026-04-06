@@ -5,7 +5,7 @@ Extract prompts with offset support for supplementary batches.
 Usage:
     python extract_prompts_offset.py \
         --input /data-1/dataset/EnsembleLLM-data/am_deepseek_r1_filtered_ad.jsonl \
-        --output /data-1/dataset/dpo-4b-extra-extracted.jsonl \
+        --output /data-1/dataset/dpo/dpo-4b/dpo-4b-extra-extracted.jsonl \
         --offset 1000 --limit 200
 """
 

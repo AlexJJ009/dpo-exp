@@ -1,7 +1,7 @@
 """
 DPO Training script for Qwen3-4B-SFT (SFT checkpoint) using TRL's DPOTrainer.
 
-Trains on preference pairs from /data-1/dataset/dpo-4b-sft-pairs.jsonl
+Trains on preference pairs from /data-1/dataset/dpo/dpo-4b-sft/dpo-4b-sft-pairs.jsonl
 and saves checkpoint to /data-1/checkpoints/qwen3-4b-sft-dpo/.
 
 The base model is the SFT checkpoint at /data-1/.cache/Qwen3-4B-Base-SFT-stage-1,
@@ -24,7 +24,7 @@ from trl import DPOConfig, DPOTrainer
 
 # ======================== Configuration ========================
 MODEL_NAME = "/data-1/.cache/Qwen3-4B-Base-SFT-stage-1"
-DATASET_PATH = "/data-1/dataset/dpo-4b-sft-pairs.jsonl"
+DATASET_PATH = "/data-1/dataset/dpo/dpo-4b-sft/dpo-4b-sft-pairs.jsonl"
 OUTPUT_DIR = "/data-1/checkpoints/qwen3-4b-sft-dpo"
 LOG_DIR = "/data-1/checkpoints/qwen3-4b-sft-dpo/training_logs"
 

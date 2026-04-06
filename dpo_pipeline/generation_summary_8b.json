@@ -2,7 +2,7 @@
   "experiment": "Qwen3-8B Preference Data Generation (Milestone 5)",
   "model": "Qwen/Qwen3-8B-Base",
   "date": "2026-04-05",
-  "output_file": "/data-1/dataset/dpo-8b-pairs.jsonl",
+  "output_file": "/data-1/dataset/dpo/dpo-8b/dpo-8b-pairs.jsonl",
   "pipeline": {
     "prompts_extracted": 2000,
     "prompt_offset": 1200,

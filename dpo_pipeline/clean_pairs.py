@@ -10,9 +10,9 @@ the answer is actually correct) by also checking regex, and vice versa.
 
 Usage:
     python clean_pairs.py \
-        --pairs /data-1/dataset/dpo-4b-pairs.jsonl \
-        --extracted /data-1/dataset/dpo-4b-extracted.jsonl \
-        --output /data-1/dataset/dpo-4b-pairs.jsonl
+        --pairs /data-1/dataset/dpo/dpo-4b/dpo-4b-pairs.jsonl \
+        --extracted /data-1/dataset/dpo/dpo-4b/dpo-4b-extracted.jsonl \
+        --output /data-1/dataset/dpo/dpo-4b/dpo-4b-pairs.jsonl
 """
 
 import argparse
