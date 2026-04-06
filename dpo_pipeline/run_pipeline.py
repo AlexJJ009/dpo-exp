@@ -61,6 +61,8 @@ def main():
                         help="Enable strict rejected response filtering (think tags, answer completeness)")
     parser.add_argument("--offset", type=int, default=None,
                         help="Offset for prompt extraction (skip N valid samples)")
+    parser.add_argument("--chat-template", action="store_true",
+                        help="Use model's tokenizer chat template for prompt formatting (for SFT/chat models)")
     args = parser.parse_args()
 
     extracted_path = os.path.join(DATASET_DIR, f"{args.output_prefix}-extracted.jsonl")
@@ -99,6 +101,8 @@ def main():
         "--tensor-parallel-size", str(args.tensor_parallel_size),
         "--gpu-memory-utilization", str(args.gpu_memory_utilization),
     ]
+    if args.chat_template:
+        rollout_cmd.append("--chat-template")
     run_step("Generate rollouts with vLLM", rollout_cmd)
 
     # Step 3: Build preference pairs

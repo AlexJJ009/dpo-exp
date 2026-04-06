@@ -55,6 +55,25 @@ def format_prompt_for_model(prompt_messages: list[dict]) -> str:
     return "".join(parts)
 
 
+def format_prompt_with_chat_template(prompt_messages: list[dict], tokenizer) -> str:
+    """
+    Format chat messages using the model's tokenizer chat template.
+
+    For SFT/chat-tuned models that were trained with a specific chat template
+    (e.g., Qwen3's <|im_start|>/<|im_end|> format), we use the tokenizer's
+    apply_chat_template to produce the correct format, then append <think>
+    to seed chain-of-thought reasoning.
+    """
+    formatted = tokenizer.apply_chat_template(
+        prompt_messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+    # Seed the thinking tag so the model starts with chain-of-thought
+    formatted += "<think>\n"
+    return formatted
+
+
 def run_rollouts(
     prompts: list[dict],
     model_name: str,
@@ -63,15 +82,32 @@ def run_rollouts(
     temperature: float,
     tensor_parallel_size: int,
     gpu_memory_utilization: float,
+    use_chat_template: bool = False,
 ) -> list[dict]:
     """Generate rollouts for each prompt using vLLM."""
     from vllm import LLM, SamplingParams
+
+    llm = LLM(
+        model=model_name,
+        tensor_parallel_size=tensor_parallel_size,
+        gpu_memory_utilization=gpu_memory_utilization,
+        trust_remote_code=True,
+        dtype="bfloat16",
+    )
+
+    # Choose prompt formatter
+    if use_chat_template:
+        tokenizer = llm.get_tokenizer()
+        print("Using model's chat template for prompt formatting")
+        formatter = lambda msgs: format_prompt_with_chat_template(msgs, tokenizer)
+    else:
+        formatter = format_prompt_for_model
 
     # Build text prompts
     text_prompts = []
     prompt_indices = []
     for idx, p in enumerate(prompts):
-        text = format_prompt_for_model(p["prompt"])
+        text = formatter(p["prompt"])
         for _ in range(num_rollouts):
             text_prompts.append(text)
             prompt_indices.append(idx)
@@ -82,14 +118,6 @@ def run_rollouts(
         temperature=temperature,
         max_tokens=max_tokens,
         top_p=0.95,
-    )
-
-    llm = LLM(
-        model=model_name,
-        tensor_parallel_size=tensor_parallel_size,
-        gpu_memory_utilization=gpu_memory_utilization,
-        trust_remote_code=True,
-        dtype="bfloat16",
     )
 
     start = time.time()
@@ -129,6 +157,8 @@ def main():
     parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature")
     parser.add_argument("--tensor-parallel-size", type=int, default=1, help="TP size for vLLM")
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9, help="GPU memory utilization")
+    parser.add_argument("--chat-template", action="store_true",
+                        help="Use model's tokenizer chat template for prompt formatting (for SFT/chat models)")
     args = parser.parse_args()
 
     prompts = load_prompts(args.input, limit=args.limit)
@@ -142,6 +172,7 @@ def main():
         temperature=args.temperature,
         tensor_parallel_size=args.tensor_parallel_size,
         gpu_memory_utilization=args.gpu_memory_utilization,
+        use_chat_template=args.chat_template,
     )
 
     with open(args.output, "w") as f:
