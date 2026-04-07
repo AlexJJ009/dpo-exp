@@ -1,6 +1,6 @@
 # DPO 实验归档索引
 
-> 最后更新：2026-04-07
+> 最后更新：2026-04-07（Server B 补充）
 > 维护：GongxunLi
 > Git 仓库：`/data-1/dpo-experiment`
 
@@ -17,6 +17,9 @@
 | 3 | Server A（本机）| Qwen3-4B-SFT DPO | Qwen3-4B-Base-SFT-stage-1 | 5,860 对 | ✅ 完成 |
 | 4 | Server A（本机）| Qwen3-8B-Base DPO | Qwen3-8B-Base | 7,934 对 | ✅ 完成 |
 | 5 | Server A（本机）| Gemma3-4B-SFT DPO | Gemma3-4B-Base-SFT-stage-1 | 3,781 对（补充中）| 🔄 进行中 |
+| B-1 | Server B | Qwen2.5-3B-Base DPO | Qwen/Qwen2.5-3B | 10,298 对（严格过滤）| ✅ 完成 |
+| B-2 | Server B | Gemma3-4B-Base DPO | google/gemma-3-4b-pt | 10,781 对（严格过滤）| 🔄 训练中 |
+| B-3 | Server B | Gemma3-4B-SFT DPO | Gemma3-4B-Base-SFT-stage-1 | 5,202 对（已同步）| ⏳ 待启动（watcher 就绪）|
 
 <!-- 其他服务器的实验请在下方「Server B」节中补充 -->
 
@@ -290,25 +293,154 @@
 
 ---
 
-## Server B（同事服务器）
+## Server B
 
-> 此节由同事维护，请参照上方 Server A 的格式补充实验记录。
+**数据根目录**：`/data-1/`
+**Checkpoint 根目录**：`/data-1/checkpoints/`
+**数据集根目录**：`/data-1/dataset/dpo/`
+**Git 仓库**：`/data-1/dpo-experiment`
 
-### 实验总览
+---
 
-<!-- 请按如下格式添加实验条目：
-| # | 实验名 | 基座模型 | 数据集规模 | 状态 |
-|---|--------|----------|-----------|------|
-| B-1 | ... | ... | ... | ✅ 完成 / 🔄 进行中 |
--->
+## 实验 B-1：Qwen2.5-3B-Base DPO
 
-（待补充）
+> Server B 首个 DPO 实验，使用 Qwen2.5-3B（非 Qwen3 系列），严格过滤，DeepSpeed ZeRO 2。
 
-### 实验详情
+### 文件位置
 
-<!-- 请按 Server A 各实验的格式，添加文件位置、训练结果、评估结果等信息 -->
+| 类型 | 路径 |
+|------|------|
+| 偏好对数据集 | `/data-1/dataset/dpo/dpo-qwen25-3b-base/dpo-qwen25-3b-base-pairs.jsonl` |
+| Rollouts | `/data-1/dataset/dpo/dpo-qwen25-3b-base/dpo-qwen25-3b-base-rollouts.jsonl` |
+| Extracted Prompts | `/data-1/dataset/dpo/dpo-qwen25-3b-base/dpo-qwen25-3b-base-extracted.jsonl` |
+| 模型 Checkpoint | `/data-1/checkpoints/qwen25-3b-base-dpo/` |
+| 最终 Checkpoint | `/data-1/checkpoints/qwen25-3b-base-dpo/checkpoint-644` |
+| 训练摘要 | `/data-1/checkpoints/qwen25-3b-base-dpo/training_logs/training_summary.json` |
+| 评估结果 | `/data-1/checkpoints/qwen25-3b-base-dpo/inference_n3/eval_metrics.json` |
+| Pipeline 脚本 | `/data-1/dpo-experiment/run_qwen25_3b_base_pipeline.sh` |
+| Pipeline 日志（初次失败）| `/data-1/dpo-experiment/run_qwen25_3b_base_pipeline.log` |
+| Resume 日志 | `/data-1/dpo-experiment/run_qwen25_3b_base_resume.log` |
 
-（待补充）
+### 训练超参数
+
+| 参数 | 值 |
+|------|----|
+| beta | 0.1 |
+| learning_rate | 5e-7 |
+| epochs | 1 |
+| per_device_batch | 1 |
+| grad_accumulation | 2 |
+| effective_batch | 16 |
+| max_length | 2048 |
+| warmup_ratio | 0.1 |
+| lr_scheduler | cosine |
+| strict_filtering | ✅ 是 |
+| num_gpus | 8 |
+| deepspeed | ZeRO Stage 2 |
+| total_steps | 644 |
+| runtime | 1,364 s（~23 min）|
+
+### 训练结果
+
+| 指标 | 初始值 | 最终值 |
+|------|--------|--------|
+| Loss | 0.7294 | 0.0 |
+| Reward Margin | -0.0502 | 15.025 |
+| Chosen Reward | — | +11.075 |
+| Rejected Reward | — | -3.959 |
+
+> ⚠️ 注意：Loss 降至 0、Margin 达 15 属极端值，可能发生过拟合。数据集规模（10298 对）相对 effective batch 16 步数过多（644 步），模型可能记忆了训练集。
+
+### 评估结果（n=3, temp=1.0, top_p=0.95, max_tokens=4096）
+
+| 数据集 | mean@3 | pass@1 | maj@3 |
+|--------|--------|--------|-------|
+| MATH-500 | 18.3% | 18.3% | 33.2% |
+| AIME-2025 | 0.0% | 0.0% | 0.0% |
+| AMC23 | 11.7% | 11.7% | 15.0% |
+| AQUA | 2.6% | 2.6% | 7.1% |
+| GSM8K | 18.4% | 18.4% | 40.8% |
+| MAWPS | 36.9% | 36.9% | 70.1% |
+| SVAMP | 27.0% | 27.0% | 53.7% |
+
+---
+
+## 实验 B-2：Gemma3-4B-Base DPO（训练中）
+
+> Gemma3-4B 预训练基座模型的 DPO 实验，严格过滤，DeepSpeed ZeRO 2，8 GPUs。
+
+### 文件位置
+
+| 类型 | 路径 |
+|------|------|
+| 偏好对数据集 | `/data-1/dataset/dpo/dpo-gemma3-4b-base/dpo-gemma3-4b-base-pairs.jsonl` |
+| Rollouts | `/data-1/dataset/dpo/dpo-gemma3-4b-base/dpo-gemma3-4b-base-rollouts.jsonl` |
+| Extracted Prompts | `/data-1/dataset/dpo/dpo-gemma3-4b-base/dpo-gemma3-4b-base-extracted.jsonl` |
+| 模型 Checkpoint | `/data-1/checkpoints/gemma3-4b-base-dpo/`（训练中）|
+| 训练摘要 | `/data-1/checkpoints/gemma3-4b-base-dpo/training_logs/training_summary.json`（训练后生成）|
+| 评估结果 | `/data-1/checkpoints/gemma3-4b-base-dpo/inference_n3/eval_metrics.json`（评估后生成）|
+| Pipeline 脚本 | `/data-1/dpo-experiment/run_gemma3_4b_base_pipeline.sh` |
+| Pipeline 日志（初次失败）| `/data-1/dpo-experiment/run_gemma3_4b_base_pipeline.log` |
+| Resume 日志 | `/data-1/dpo-experiment/run_gemma3_4b_base_resume.log` |
+
+### 训练超参数
+
+| 参数 | 值 |
+|------|----|
+| beta | 0.1 |
+| learning_rate | 5e-7 |
+| epochs | 1 |
+| per_device_batch | 1 |
+| grad_accumulation | 2 |
+| effective_batch | 16 |
+| max_length | 2048 |
+| warmup_ratio | 0.1 |
+| lr_scheduler | cosine |
+| strict_filtering | ✅ 是 |
+| num_gpus | 8 |
+| deepspeed | ZeRO Stage 2 |
+| attn_implementation | eager（Gemma3 sliding window 兼容）|
+
+### 已知问题与修复
+
+- `google/gemma-3-4b-pt` 为预训练基座，tokenizer 无 chat template。TRL v0.29.0 的 `DPOTrainer` 无条件调用 `apply_chat_template`，导致首次运行报 `ValueError`。
+  **修复**：在 `train_dpo_gemma3_4b_base.py` 中于 tokenizer 加载后补充一个纯文本 fallback template（`chat_template is None` 时生效）。
+
+### 进度
+
+- [x] Step 1：生成偏好对（10,817 对原始 → 10,781 对 clean，1200 prompt，`--strict`）
+- [x] Step 2：Clean pairs
+- [ ] Step 3：DPO 训练（DeepSpeed ZeRO 2，8 GPUs）← 当前运行中（约 32%）
+- [ ] Step 4：评估（7 个数学基准）
+
+---
+
+## 实验 B-3：Gemma3-4B-SFT DPO（待启动，watcher 已就绪）
+
+> 基于 SFT 对齐版 Gemma3-4B 的 DPO 实验。数据集已从 Server A 同步到本机，watcher 监控 B-2 完成后自动启动。
+>
+> ⚠️ 注意：本机应使用 `run_gemma3_4b_sft_resume.sh` 而非 `run_gemma3_4b_sft_continue.sh`。
+> 后者会重新生成 extra 数据并覆盖已合并的 5,202 对，导致数据错误。
+
+### 文件位置
+
+| 类型 | 路径 |
+|------|------|
+| 偏好对数据集（已合并）| `/data-1/dataset/dpo/dpo-gemma3-4b-sft/dpo-gemma3-4b-sft-pairs.jsonl`（5,202 对）|
+| Extra 数据集（合并来源）| `/data-1/dataset/dpo/dpo-gemma3-4b-sft-extra/dpo-gemma3-4b-sft-extra-pairs.jsonl`（1,421 对）|
+| 模型 | `/data-1/.cache/gemma3-4b-base-sft-stage-1` |
+| 模型 Checkpoint | `/data-1/checkpoints/gemma3-4b-sft-dpo/`（训练后生成）|
+| Resume 脚本 | `/data-1/dpo-experiment/run_gemma3_4b_sft_resume.sh` |
+| Resume 日志 | `/data-1/dpo-experiment/run_gemma3_4b_sft_resume.log`（训练后生成）|
+
+### 进度
+
+- [x] Step 1：生成偏好对（Server A 完成，3,781 对）
+- [x] Step 1'：补充生成（Server A 完成，offset=1200，500 新 prompt → 1,421 对 extra）
+- [x] Step 2/2'：Clean pairs
+- [x] Step 3'：合并数据集（5,202 对，已同步至本机）
+- [ ] Step 4：DPO 训练（DeepSpeed ZeRO 2，8 GPUs）← watcher 等待 B-2 完成后自动启动
+- [ ] Step 5：评估（7 个数学基准）
 
 ---
 
@@ -320,6 +452,9 @@
 | Server A | Qwen3-8B-Base DPO | 51.1% | 51.1% | 76.6% | 13.5% |
 | Server A | Qwen3-4B-Base DPO v1 | 35.7% | 35.7% | 65.6% | 36.4% |
 | Server A | Qwen3-4B-Base DPO v2 | 33.1% | 33.1% | 62.8% | 36.3% |
+| Server B | Qwen2.5-3B-Base DPO | 18.3% | 18.3% | — | — |
+| Server B | Gemma3-4B-Base DPO | — | — | — | 🔄 训练中 |
 
 > **关键结论**：SFT 对齐对 DPO 效果影响显著。4B-SFT-DPO 在 MATH-500 上超过 8B-Base-DPO（67.7% vs 51.1%）。
 > Base 模型 DPO 在 GSM8K/MAWPS/SVAMP 上答案格式对齐问题严重（抽取失败率 >98%），这些数据集的评估结果不可靠。
+> Qwen2.5-3B-Base DPO（Server B）训练指标异常（loss→0, margin→15），疑似过拟合，评估结果仅供参考。

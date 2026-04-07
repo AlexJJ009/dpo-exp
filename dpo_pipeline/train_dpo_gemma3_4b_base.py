@@ -101,6 +101,22 @@ def main():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    # gemma-3-4b-pt is a pretrained base model with no chat template.
+    # TRL v0.29.0 DPOTrainer unconditionally calls apply_chat_template, so we
+    # must provide one. Use a minimal template that concatenates messages as
+    # plain text — appropriate for base-model DPO where the format signal comes
+    # from the preference pairs themselves.
+    if tokenizer.chat_template is None:
+        tokenizer.chat_template = (
+            "{% for message in messages %}"
+            "{% if message['role'] == 'system' %}{{ message['content'] }}\n\n"
+            "{% elif message['role'] == 'user' %}{{ message['content'] }}\n\n"
+            "{% elif message['role'] == 'assistant' %}{{ message['content'] }}"
+            "{% endif %}"
+            "{% endfor %}"
+        )
+        print("chat_template not found in tokenizer — applied plain-text fallback.")
+
     # Model loading is handled by Accelerate/DeepSpeed — load in fp32 here,
     # DeepSpeed will shard and cast to bf16 automatically.
     model = AutoModelForCausalLM.from_pretrained(
