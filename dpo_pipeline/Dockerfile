@@ -20,7 +20,7 @@ ARG PIP_NO_CACHE_DIR=1
 # ======================== Upgrade TRL to v0.29.0 =============================
 # The base image has TRL 0.9.6. Upgrade to v0.29.0 with its dependencies.
 # TRL v0.29.0 requires transformers>=4.56.2, accelerate>=1.4.0, datasets>=3.0.0
-RUN uv pip install "trl==0.29.0"
+RUN uv pip install "trl==0.29.0" deepspeed
 
 # Verify torch wasn't downgraded by transitive deps
 RUN TORCH_VER=$(python -c "import torch; print(torch.__version__)") && \
