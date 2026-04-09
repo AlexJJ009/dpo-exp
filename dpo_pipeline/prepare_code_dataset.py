@@ -32,7 +32,7 @@ from pathlib import Path
 import pandas as pd
 
 SOURCE_DIR = Path("/data-1/dataset/EnsembleLLM-data-processed")
-OUTPUT_DIR = Path("/data-1/dataset/dpo")
+OUTPUT_DIR = Path("/data-1/dataset")
 
 # Format instruction appended to every user prompt
 CODE_FORMAT_SUFFIX = (
@@ -165,8 +165,8 @@ def process_test_benchmarks() -> dict:
     """Create test parquet files for code benchmarks.
 
     Each benchmark gets its own directory under OUTPUT_DIR, e.g.:
-      /data-1/dataset/dpo/humaneval/humaneval-test.parquet
-      /data-1/dataset/dpo/mbpp/mbpp-test.parquet
+      /data-1/dataset/humaneval/humaneval-test.parquet
+      /data-1/dataset/mbpp/mbpp-test.parquet
     """
     stats = {}
 

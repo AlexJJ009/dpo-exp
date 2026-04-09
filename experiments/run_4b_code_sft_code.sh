@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Qwen3-4B Code-SFT + Code DPO
 MODEL="/data-1/.cache/Qwen3-4B-Base-Code-SFT/checkpoint-38"
-TRAIN_DATA="/data-1/dataset/dpo/code/code-train.jsonl"
+TRAIN_DATA="/data-1/dataset/code/code-train.jsonl"
 EXP_NAME="dpo-4b-code-sft-code"
 CHECKPOINT_DIR="/data-1/checkpoints/qwen3-4b-code-sft-dpo-code"
 EVAL_TEST_FILES="/data-1/dataset/EnsembleLLM-data-processed/HumanEval/test.jsonl /data-1/dataset/EnsembleLLM-data-processed/MBPP/test.jsonl /data-1/dataset/EnsembleLLM-data-processed/BigCodeBench/test.jsonl"

@@ -32,7 +32,7 @@ from pathlib import Path
 import pandas as pd
 
 SOURCE_DIR = Path("/data-1/dataset/EnsembleLLM-data-processed")
-OUTPUT_DIR = Path("/data-1/dataset/dpo")
+OUTPUT_DIR = Path("/data-1/dataset")
 
 # Format instruction appended to every user prompt so model outputs
 # a structured final answer that the pipeline can reliably extract.
