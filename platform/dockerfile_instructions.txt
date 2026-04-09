@@ -1,5 +1,5 @@
 RUN pip install --no-cache-dir --no-deps /mnt/dolphinfs/ssd_pool/docker/user/hadoop-ai-search/lgx/dpo-wheels/*.whl
-RUN python -c "import torch; print(f'PyTorch: {torch.__version__}'); import trl; print(f'TRL: {trl.__version__}'); import deepspeed; print(f'DeepSpeed: {deepspeed.__version__}') if __import__('importlib').util.find_spec('deepspeed') else print('DeepSpeed: skip')"
+RUN python -c "import vllm; print(f'vLLM: {vllm.__version__}'); import trl; print(f'TRL: {trl.__version__}'); import deepspeed; print(f'DeepSpeed: {deepspeed.__version__}')"
 ENV HF_HUB_OFFLINE=1
 ENV VLLM_USE_V1=1
 ENV VLLM_NO_USAGE_STATS=1
