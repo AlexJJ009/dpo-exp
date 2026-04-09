@@ -120,9 +120,9 @@ def create_example_json(source_path: Path, output_dir: Path):
             },
         },
         "train_example": {
-            "prompt": [{"role": "user", "content": user_content[:500] + "..." + CODE_FORMAT_SUFFIX}],
-            "reference_answer": sample.get("extracted_code", "")[:300] + "...",
-            "chosen": assistant_content[:300] + "...",
+            "prompt": [{"role": "user", "content": user_content + CODE_FORMAT_SUFFIX}],
+            "reference_answer": sample.get("extracted_code", ""),
+            "chosen": assistant_content,
             "test_case": sample.get("test_case", ""),
             "source": source,
         },
@@ -161,9 +161,13 @@ def _build_livecodebench_test_code(public_test_cases) -> str:
     return "\n".join(lines)
 
 
-def process_test_benchmarks(output_dir: Path) -> dict:
-    """Create test parquet files for code benchmarks."""
-    output_dir.mkdir(parents=True, exist_ok=True)
+def process_test_benchmarks() -> dict:
+    """Create test parquet files for code benchmarks.
+
+    Each benchmark gets its own directory under OUTPUT_DIR, e.g.:
+      /data-1/dataset/dpo/humaneval/humaneval-test.parquet
+      /data-1/dataset/dpo/mbpp/mbpp-test.parquet
+    """
     stats = {}
 
     benchmarks = {
@@ -190,6 +194,9 @@ def process_test_benchmarks(output_dir: Path) -> dict:
         if not path.exists():
             print(f"  [SKIP] {name}: {path} not found")
             continue
+
+        bench_dir = OUTPUT_DIR / name
+        bench_dir.mkdir(parents=True, exist_ok=True)
 
         rows = []
         with open(path) as f:
@@ -225,7 +232,7 @@ def process_test_benchmarks(output_dir: Path) -> dict:
                     "extra_info": {"source": cfg["data_source"], "task_id": task_id},
                 })
 
-        out_parquet = output_dir / f"{name}-test.parquet"
+        out_parquet = bench_dir / f"{name}-test.parquet"
         pd.DataFrame(rows).to_parquet(str(out_parquet))
         stats[name] = {"count": len(rows), "parquet": str(out_parquet)}
         print(f"  [OK] {name}: {len(rows)} tasks -> {out_parquet}")
@@ -271,9 +278,9 @@ def main():
     print(f"  Sample prompt (first 100 chars): {first['prompt'][0]['content'][:100]}...")
     print(f"  Output: {out_train}")
 
-    # 4. Test benchmarks
+    # 4. Test benchmarks (each in its own directory under OUTPUT_DIR)
     print(f"\n--- Test benchmarks ---")
-    test_stats = process_test_benchmarks(output_dir)
+    test_stats = process_test_benchmarks()
 
     print(f"\n{'='*60}")
     print(f"  DONE")
