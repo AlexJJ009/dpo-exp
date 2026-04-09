@@ -1,0 +1,48 @@
+# ==============================================================================
+# Dockerfile instructions for company platform
+#
+# Base image: sglang image (python3.12 + cuda12.6 + torch2.9.1+cu126)
+#
+# DO NOT select the "Conda" software package — it will override Python 3.12
+# with Python 3.11 and break compatibility.
+#
+# Paste everything below into the platform's "Dockerfile instructions" field.
+# ==============================================================================
+
+# ---- Network proxy (platform internal) ----
+ENV http_proxy=http://11.45.14.132:8420
+ENV https_proxy=http://11.45.14.132:8420
+
+# ---- System dependencies ----
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl build-essential && \
+    rm -rf /var/lib/apt/lists/*
+
+# ---- vLLM (inference engine, alongside existing sglang) ----
+RUN pip install vllm==0.12.0
+
+# ---- TRL + DeepSpeed (DPO training) ----
+RUN pip install "trl==0.29.0" "deepspeed==0.18.9"
+
+# ---- Math evaluation dependencies ----
+RUN pip install math-verify latex2sympy2-extended pylatexenc
+
+# ---- Verify installation ----
+RUN python -c "\
+import sys; print(f'Python:       {sys.version}'); \
+import torch; print(f'PyTorch:      {torch.__version__}'); \
+import vllm;  print(f'vLLM:         {vllm.__version__}'); \
+import trl;   print(f'TRL:          {trl.__version__}'); \
+import deepspeed; print(f'DeepSpeed:    {deepspeed.__version__}'); \
+import transformers; print(f'Transformers: {transformers.__version__}'); \
+from math_verify import parse, verify; print('math-verify:  OK')"
+
+# ---- Environment ----
+ENV HF_HUB_OFFLINE=1
+ENV VLLM_USE_V1=1
+ENV VLLM_NO_USAGE_STATS=1
+ENV PYTHONUNBUFFERED=1
+
+# ---- Clean proxy (optional, avoid leaking to runtime) ----
+ENV http_proxy=
+ENV https_proxy=
