@@ -63,6 +63,40 @@ class MetricLoggerCallback(TrainerCallback):
                     self.has_nan_inf = True
 
 
+def _copy_preprocessor_config(model_name: str, output_dir: str):
+    """Copy preprocessor_config.json from source model to checkpoint if missing.
+
+    Gemma3 is architecturally multimodal (Gemma3ForConditionalGeneration).
+    vLLM tries to init multimodal processing when loading checkpoints and
+    fails with OSError if preprocessor_config.json is absent.
+    """
+    import shutil
+    dst = Path(output_dir) / "preprocessor_config.json"
+    if dst.exists():
+        return
+
+    # Try resolving the HF cache snapshot path
+    from transformers.utils import TRANSFORMERS_CACHE
+    from huggingface_hub import try_to_load_from_cache
+    try:
+        cached = try_to_load_from_cache(model_name, "preprocessor_config.json")
+        if cached and isinstance(cached, str):
+            shutil.copy2(cached, dst)
+            print(f"Copied preprocessor_config.json from HF cache to {dst}")
+            return
+    except Exception:
+        pass
+
+    # Fallback: check if model_name is a local directory
+    src = Path(model_name) / "preprocessor_config.json"
+    if src.exists():
+        shutil.copy2(src, dst)
+        print(f"Copied preprocessor_config.json from {src} to {dst}")
+    else:
+        print(f"WARNING: preprocessor_config.json not found for {model_name}. "
+              "vLLM evaluation may fail for multimodal architectures.")
+
+
 def load_preference_dataset(path: str) -> Dataset:
     """Load preference pairs from JSONL file."""
     records = []
@@ -195,6 +229,12 @@ def main():
     print("\nSaving final model checkpoint...")
     trainer.save_model(OUTPUT_DIR)
     tokenizer.save_pretrained(OUTPUT_DIR)
+
+    # Gemma3 is architecturally multimodal — vLLM requires preprocessor_config.json
+    # to load the checkpoint even for text-only evaluation. Copy it from the source
+    # model if present and missing from the checkpoint directory.
+    _copy_preprocessor_config(MODEL_NAME, OUTPUT_DIR)
+
     print(f"Checkpoint saved to {OUTPUT_DIR}")
 
     # ======================== Extract & Save Metrics ========================

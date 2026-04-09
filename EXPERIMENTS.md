@@ -1,6 +1,6 @@
 # DPO 实验归档索引
 
-> 最后更新：2026-04-07（Server B 补充）
+> 最后更新：2026-04-07（B-2 完成，B-3 待启动）
 > 维护：GongxunLi
 > Git 仓库：`/data-1/dpo-experiment`
 
@@ -18,8 +18,8 @@
 | 4 | Server A（本机）| Qwen3-8B-Base DPO | Qwen3-8B-Base | 7,934 对 | ✅ 完成 |
 | 5 | Server A（本机）| Gemma3-4B-SFT DPO | Gemma3-4B-Base-SFT-stage-1 | 3,781 对（补充中）| 🔄 进行中 |
 | B-1 | Server B | Qwen2.5-3B-Base DPO | Qwen/Qwen2.5-3B | 10,298 对（严格过滤）| ✅ 完成 |
-| B-2 | Server B | Gemma3-4B-Base DPO | google/gemma-3-4b-pt | 10,781 对（严格过滤）| 🔄 训练中 |
-| B-3 | Server B | Gemma3-4B-SFT DPO | Gemma3-4B-Base-SFT-stage-1 | 5,202 对（已同步）| ⏳ 待启动（watcher 就绪）|
+| B-2 | Server B | Gemma3-4B-Base DPO | google/gemma-3-4b-pt | 10,781 对（严格过滤）| ✅ 完成 |
+| B-3 | Server B | Gemma3-4B-SFT DPO | Gemma3-4B-Base-SFT-stage-1 | 5,202 对（已同步）| ⏳ 待启动（watcher 未触发）|
 
 <!-- 其他服务器的实验请在下方「Server B」节中补充 -->
 
@@ -365,7 +365,7 @@
 
 ---
 
-## 实验 B-2：Gemma3-4B-Base DPO（训练中）
+## 实验 B-2：Gemma3-4B-Base DPO
 
 > Gemma3-4B 预训练基座模型的 DPO 实验，严格过滤，DeepSpeed ZeRO 2，8 GPUs。
 
@@ -376,12 +376,14 @@
 | 偏好对数据集 | `/data-1/dataset/dpo/dpo-gemma3-4b-base/dpo-gemma3-4b-base-pairs.jsonl` |
 | Rollouts | `/data-1/dataset/dpo/dpo-gemma3-4b-base/dpo-gemma3-4b-base-rollouts.jsonl` |
 | Extracted Prompts | `/data-1/dataset/dpo/dpo-gemma3-4b-base/dpo-gemma3-4b-base-extracted.jsonl` |
-| 模型 Checkpoint | `/data-1/checkpoints/gemma3-4b-base-dpo/`（训练中）|
-| 训练摘要 | `/data-1/checkpoints/gemma3-4b-base-dpo/training_logs/training_summary.json`（训练后生成）|
-| 评估结果 | `/data-1/checkpoints/gemma3-4b-base-dpo/inference_n3/eval_metrics.json`（评估后生成）|
+| 模型 Checkpoint | `/data-1/checkpoints/gemma3-4b-base-dpo/` |
+| 最终 Checkpoint | `/data-1/checkpoints/gemma3-4b-base-dpo/checkpoint-674` |
+| 训练摘要 | `/data-1/checkpoints/gemma3-4b-base-dpo/training_logs/training_summary.json` |
+| 评估结果 | `/data-1/checkpoints/gemma3-4b-base-dpo/inference_n3/eval_metrics.json` |
 | Pipeline 脚本 | `/data-1/dpo-experiment/run_gemma3_4b_base_pipeline.sh` |
 | Pipeline 日志（初次失败）| `/data-1/dpo-experiment/run_gemma3_4b_base_pipeline.log` |
 | Resume 日志 | `/data-1/dpo-experiment/run_gemma3_4b_base_resume.log` |
+| 评估日志（重跑）| `/data-1/dpo-experiment/run_gemma3_4b_base_eval.log` |
 
 ### 训练超参数
 
@@ -400,24 +402,54 @@
 | num_gpus | 8 |
 | deepspeed | ZeRO Stage 2 |
 | attn_implementation | eager（Gemma3 sliding window 兼容）|
+| total_steps | 674 |
+| runtime | 2,228 s（~37 min）|
 
 ### 已知问题与修复
 
 - `google/gemma-3-4b-pt` 为预训练基座，tokenizer 无 chat template。TRL v0.29.0 的 `DPOTrainer` 无条件调用 `apply_chat_template`，导致首次运行报 `ValueError`。
   **修复**：在 `train_dpo_gemma3_4b_base.py` 中于 tokenizer 加载后补充一个纯文本 fallback template（`chat_template is None` 时生效）。
+- Gemma3 为多模态架构，DPO 训练保存 checkpoint 时不含 `preprocessor_config.json`，导致 vLLM 加载评估时报 `OSError`。
+  **修复**：手动从原始模型目录复制 `preprocessor_config.json` 到 checkpoint 目录，并单独重跑评估。
+
+### 训练结果
+
+| 指标 | 初始值 | 最终值 |
+|------|--------|--------|
+| Loss | 0.726 | 0.0258 |
+| Reward Margin | -0.0095 | 18.8375 |
+| Chosen Reward | — | +18.2125 |
+| Rejected Reward | — | -0.6257 |
+
+> ⚠️ 注意：与 B-1 类似，Loss 接近 0、Margin 达 18.8 属极端值，严重过拟合。数据集 10,781 对，effective batch 16，步数 674，模型可能记忆了训练集。评估性能极差（MATH-500 mean@3 仅 2.7%），佐证了过拟合判断。
+
+### 评估结果（n=3, temp=1.0, top_p=0.95, max_tokens=4096）
+
+> ⚠️ 注意：所有数据集答案抽取失败率 >70%，Base 模型输出格式严重不符合提取器预期，评估结果极不可靠。
+
+| 数据集 | mean@3 | pass@1 | pass@3 | maj@3 | extraction_fail |
+|--------|--------|--------|--------|-------|----------------|
+| MATH-500 | 2.7% | 2.7% | 6.6% | 4.0% | **72.3%** ⚠️ |
+| AIME-2025 | 0.0% | 0.0% | 0.0% | 0.0% | **73.3%** ⚠️ |
+| AMC23 | 0.0% | 0.0% | 0.0% | 0.0% | **75.8%** ⚠️ |
+| AQUA | 1.6% | 1.6% | 4.7% | 2.8% | **81.8%** ⚠️ |
+| GSM8K | 4.4% | 4.4% | 12.0% | 7.9% | **70.6%** ⚠️ |
+| MAWPS | 8.4% | 8.4% | 21.7% | 19.4% | **70.9%** ⚠️ |
+| SVAMP | 6.4% | 6.4% | 17.3% | 14.0% | **74.1%** ⚠️ |
 
 ### 进度
 
 - [x] Step 1：生成偏好对（10,817 对原始 → 10,781 对 clean，1200 prompt，`--strict`）
 - [x] Step 2：Clean pairs
-- [ ] Step 3：DPO 训练（DeepSpeed ZeRO 2，8 GPUs）← 当前运行中（约 32%）
-- [ ] Step 4：评估（7 个数学基准）
+- [x] Step 3：DPO 训练（DeepSpeed ZeRO 2，8 GPUs，674 步，37 min）
+- [x] Step 4：评估（7 个数学基准，774 s）
 
 ---
 
-## 实验 B-3：Gemma3-4B-SFT DPO（待启动，watcher 已就绪）
+## 实验 B-3：Gemma3-4B-SFT DPO（待手动启动）
 
-> 基于 SFT 对齐版 Gemma3-4B 的 DPO 实验。数据集已从 Server A 同步到本机，watcher 监控 B-2 完成后自动启动。
+> 基于 SFT 对齐版 Gemma3-4B 的 DPO 实验。数据集已从 Server A 同步到本机。
+> B-2 已完成，但 watcher 未自动触发 B-3，需手动启动。
 >
 > ⚠️ 注意：本机应使用 `run_gemma3_4b_sft_resume.sh` 而非 `run_gemma3_4b_sft_continue.sh`。
 > 后者会重新生成 extra 数据并覆盖已合并的 5,202 对，导致数据错误。
@@ -439,7 +471,7 @@
 - [x] Step 1'：补充生成（Server A 完成，offset=1200，500 新 prompt → 1,421 对 extra）
 - [x] Step 2/2'：Clean pairs
 - [x] Step 3'：合并数据集（5,202 对，已同步至本机）
-- [ ] Step 4：DPO 训练（DeepSpeed ZeRO 2，8 GPUs）← watcher 等待 B-2 完成后自动启动
+- [ ] Step 4：DPO 训练（DeepSpeed ZeRO 2，8 GPUs）← watcher 未触发，需手动启动
 - [ ] Step 5：评估（7 个数学基准）
 
 ---
@@ -453,8 +485,55 @@
 | Server A | Qwen3-4B-Base DPO v1 | 35.7% | 35.7% | 65.6% | 36.4% |
 | Server A | Qwen3-4B-Base DPO v2 | 33.1% | 33.1% | 62.8% | 36.3% |
 | Server B | Qwen2.5-3B-Base DPO | 18.3% | 18.3% | — | — |
-| Server B | Gemma3-4B-Base DPO | — | — | — | 🔄 训练中 |
+| Server B | Gemma3-4B-Base DPO | 2.7% | 2.7% | 6.6% | **72.3%** ⚠️ |
 
-> **关键结论**：SFT 对齐对 DPO 效果影响显著。4B-SFT-DPO 在 MATH-500 上超过 8B-Base-DPO（67.7% vs 51.1%）。
-> Base 模型 DPO 在 GSM8K/MAWPS/SVAMP 上答案格式对齐问题严重（抽取失败率 >98%），这些数据集的评估结果不可靠。
-> Qwen2.5-3B-Base DPO（Server B）训练指标异常（loss→0, margin→15），疑似过拟合，评估结果仅供参考。
+> **关键结论**：
+> 1. SFT 对齐对 DPO 效果影响显著。4B-SFT-DPO 在 MATH-500 上超过 8B-Base-DPO（67.7% vs 51.1%）。
+> 2. Gemma3-4B-Base DPO（Server B）表现极差（MATH-500 仅 2.7%），训练指标严重过拟合（loss→0.026, margin→18.8），且答案抽取失败率 >70%。
+> 3. Qwen2.5-3B-Base DPO（Server B）同样过拟合（loss→0, margin→15），评估结果仅供参考。
+> 4. Server B 两个 Base 模型实验均出现过拟合，可能与数据集规模过大（10k+ 对）、effective batch 较小（16）、单 epoch 步数过多有关。
+> 5. Base 模型 DPO 在所有数据集上答案格式对齐问题严重，评估结果整体不可靠。
+
+---
+
+## Pipeline 故障复盘与改进（Server B 实验经验）
+
+Server B 的 B-1 / B-2 实验在运行中遇到 **4 类故障**，每次都需要手动创建 resume 脚本。以下记录故障根因与已实施的改进。
+
+### 故障 1：Docker 镜像缺少 DeepSpeed
+
+- **影响**：B-1 和 B-2 的 Step 3（DPO 训练）均失败
+- **错误**：`ImportError: DeepSpeed is not installed`
+- **原因**：`dpo-harness` Dockerfile 只装了 TRL，未装 DeepSpeed。训练使用 `accelerate launch --config_file zero2.yaml` 需要 DeepSpeed
+- **修复**：Dockerfile 中 `RUN uv pip install "trl==0.29.0" deepspeed`，重建镜像
+- **代价**：Step 1-2 的 GPU 时间浪费（Qwen 38min, Gemma 115min），但数据已持久化不需重跑
+
+### 故障 2：评估容器缺少 PYTHONPATH
+
+- **影响**：所有实验的 Step 4（评估）
+- **错误**：`ModuleNotFoundError: No module named 'verl'`
+- **原因**：原脚本用 `bash -c "cd /data-1/verl07/verl && python ..."` 但 Python 模块解析需要 PYTHONPATH
+- **修复**：Docker run 添加 `-e PYTHONPATH=/data-1/verl07/verl -w /data-1/verl07/verl`
+
+### 故障 3：Gemma3 Base 模型无 chat_template
+
+- **影响**：B-2 的 Step 3（DPO 训练）
+- **错误**：`ValueError` — TRL v0.29.0 `DPOTrainer` 无条件调用 `apply_chat_template()`
+- **原因**：`google/gemma-3-4b-pt` 是预训练基座，tokenizer 无 chat template
+- **修复**：`train_dpo_gemma3_4b_base.py` 中检测 `chat_template is None` 时注入纯文本 fallback
+
+### 故障 4：Gemma3 Checkpoint 缺少 preprocessor_config.json
+
+- **影响**：B-2 的 Step 4（评估）
+- **错误**：`OSError: Can't load image processor for '.../gemma3-4b-base-dpo'`
+- **原因**：Gemma3 架构为多模态（`Gemma3ForConditionalGeneration`），vLLM 加载时需要 `preprocessor_config.json` 初始化多模态处理管线。但 TRL 的 `trainer.save_model()` 不保存此文件
+- **修复**：在训练脚本 `save_model()` 后自动从源模型复制 `preprocessor_config.json` 到 checkpoint 目录
+
+### 已实施的脚本改进
+
+| 改进项 | 说明 |
+|--------|------|
+| **Pre-flight 检查** | Pipeline 启动前验证 Docker 镜像存在、关键依赖可导入（deepspeed/trl/verl）、GPU 数量 |
+| **幂等步骤设计** | 每步检查输出文件是否已存在，自动跳过已完成步骤。无需编写单独的 resume 脚本 |
+| **preprocessor_config.json 自动复制** | Gemma3 训练脚本在 `save_model()` 后自动从源模型复制，避免 vLLM 加载失败 |
+| **chat_template fallback** | Base 模型训练脚本已内置 `chat_template is None` 检测和纯文本模板注入 |

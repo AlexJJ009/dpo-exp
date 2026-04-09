@@ -22,6 +22,11 @@ ARG PIP_NO_CACHE_DIR=1
 # TRL v0.29.0 requires transformers>=4.56.2, accelerate>=1.4.0, datasets>=3.0.0
 RUN uv pip install "trl==0.29.0" deepspeed
 
+# ======================== Math verification deps ==============================
+# For offline evaluation (compute_score_latex_verify). latex2sympy2_extended and
+# pylatexenc are already in the base image.
+RUN uv pip install math-verify
+
 # Verify torch wasn't downgraded by transitive deps
 RUN TORCH_VER=$(python -c "import torch; print(torch.__version__)") && \
     echo "PyTorch version after TRL upgrade: ${TORCH_VER}"

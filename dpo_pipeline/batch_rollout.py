@@ -22,13 +22,17 @@ import sys
 import time
 
 
-def load_prompts(path: str, limit: int | None = None) -> list[dict]:
-    """Load extracted prompts from JSONL file."""
+def load_prompts(path: str, limit: int | None = None, offset: int = 0) -> list[dict]:
+    """Load extracted prompts from JSONL file with optional offset and limit."""
     prompts = []
+    skipped = 0
     with open(path, "r") as f:
         for line in f:
             line = line.strip()
             if not line:
+                continue
+            if skipped < offset:
+                skipped += 1
                 continue
             prompts.append(json.loads(line))
             if limit is not None and len(prompts) >= limit:
@@ -83,8 +87,15 @@ def run_rollouts(
     tensor_parallel_size: int,
     gpu_memory_utilization: float,
     use_chat_template: bool = False,
+    think_seed: bool = True,
 ) -> list[dict]:
-    """Generate rollouts for each prompt using vLLM."""
+    """Generate rollouts for each prompt using vLLM.
+
+    Args:
+        think_seed: If True, append '<think>\\n' to each prompt and prepend it
+                    to each response.  Set to False for MCQ models that were
+                    not trained with <think> tags.
+    """
     from vllm import LLM, SamplingParams
 
     llm = LLM(
@@ -98,8 +109,15 @@ def run_rollouts(
     # Choose prompt formatter
     if use_chat_template:
         tokenizer = llm.get_tokenizer()
-        print("Using model's chat template for prompt formatting")
-        formatter = lambda msgs: format_prompt_with_chat_template(msgs, tokenizer)
+        seed_label = "with <think> seed" if think_seed else "without <think> seed"
+        print(f"Using model's chat template for prompt formatting ({seed_label})")
+        if think_seed:
+            formatter = lambda msgs: format_prompt_with_chat_template(msgs, tokenizer)
+        else:
+            # Use chat template but do NOT append <think>
+            formatter = lambda msgs: tokenizer.apply_chat_template(
+                msgs, tokenize=False, add_generation_prompt=True,
+            )
     else:
         formatter = format_prompt_for_model
 
@@ -132,18 +150,48 @@ def run_rollouts(
         for out_idx, out in enumerate(outputs):
             if prompt_indices[out_idx] == prompt_idx:
                 generated_text = out.outputs[0].text
-                # Prepend the <think> we added as seed
-                full_response = "<think>\n" + generated_text
+                if think_seed:
+                    full_response = "<think>\n" + generated_text
+                else:
+                    full_response = generated_text
                 rollout_responses.append(full_response)
 
-        results.append({
+        record = {
             "prompt": p["prompt"],
             "reference_answer": p["reference_answer"],
             "chosen": p["chosen"],
             "rollouts": rollout_responses,
-        })
+        }
+        # Pass through code-mode fields if present
+        if "test_case" in p:
+            record["test_case"] = p["test_case"]
+        if "source" in p:
+            record["source"] = p["source"]
+        results.append(record)
 
     return results
+
+
+def _dp_rollout_worker(args_tuple):
+    """Data-parallel worker: run vLLM generation on a single GPU."""
+    import os, pickle
+    gpu_id, model_name, text_prompts, sp_kwargs, gpu_mem_util, out_file = args_tuple
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+
+    from vllm import LLM, SamplingParams
+
+    llm = LLM(
+        model=model_name,
+        tensor_parallel_size=1,
+        gpu_memory_utilization=gpu_mem_util,
+        trust_remote_code=True,
+        dtype="bfloat16",
+    )
+    outputs = llm.generate(text_prompts, SamplingParams(**sp_kwargs))
+    results = [o.outputs[0].text for o in outputs]
+    with open(out_file, "wb") as f:
+        pickle.dump(results, f)
+    print(f"  [GPU {gpu_id}] Done: {len(text_prompts)} items -> {out_file}", flush=True)
 
 
 def main():
@@ -153,33 +201,137 @@ def main():
     parser.add_argument("--model", default="Qwen/Qwen3-4B-Base", help="Model name/path")
     parser.add_argument("--num-rollouts", type=int, default=2, help="Rollouts per prompt")
     parser.add_argument("--limit", type=int, default=None, help="Max prompts to process")
+    parser.add_argument("--offset", type=int, default=0, help="Skip first N prompts (for incremental rollout)")
+    parser.add_argument("--append", action="store_true", help="Append to existing output file instead of overwriting")
     parser.add_argument("--max-tokens", type=int, default=4096, help="Max tokens per rollout")
     parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature")
     parser.add_argument("--tensor-parallel-size", type=int, default=1, help="TP size for vLLM")
+    parser.add_argument("--data-parallel-size", type=int, default=1,
+                        help="Number of GPUs for data parallelism (each TP=1). Overrides --tensor-parallel-size when > 1.")
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9, help="GPU memory utilization")
     parser.add_argument("--chat-template", action="store_true",
                         help="Use model's tokenizer chat template for prompt formatting (for SFT/chat models)")
+    parser.add_argument("--no-think-seed", action="store_true",
+                        help="Do not seed responses with <think> tag (for MCQ models not trained with think tags)")
     args = parser.parse_args()
 
-    prompts = load_prompts(args.input, limit=args.limit)
-    print(f"Loaded {len(prompts)} prompts")
+    prompts = load_prompts(args.input, limit=args.limit, offset=args.offset)
+    print(f"Loaded {len(prompts)} prompts (offset={args.offset}, limit={args.limit})")
 
-    results = run_rollouts(
-        prompts=prompts,
-        model_name=args.model,
-        num_rollouts=args.num_rollouts,
-        max_tokens=args.max_tokens,
-        temperature=args.temperature,
-        tensor_parallel_size=args.tensor_parallel_size,
-        gpu_memory_utilization=args.gpu_memory_utilization,
-        use_chat_template=args.chat_template,
-    )
+    dp = args.data_parallel_size
+    if dp > 1:
+        # ---- Data-parallel rollout: split across GPUs ----
+        import multiprocessing as mp
+        import os, pickle, tempfile
 
-    with open(args.output, "w") as f:
+        think_seed = not args.no_think_seed
+
+        # Format prompts in main process (load tokenizer only)
+        if args.chat_template:
+            from transformers import AutoTokenizer
+            tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
+            seed_label = "with <think> seed" if think_seed else "without <think> seed"
+            print(f"Using model's chat template for prompt formatting ({seed_label})")
+            if think_seed:
+                def formatter(msgs):
+                    return format_prompt_with_chat_template(msgs, tokenizer)
+            else:
+                def formatter(msgs):
+                    return tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
+        else:
+            formatter = format_prompt_for_model
+
+        # Build flat list of text prompts with prompt index tracking
+        text_prompts = []
+        prompt_indices = []
+        for idx, p in enumerate(prompts):
+            text = formatter(p["prompt"])
+            for _ in range(args.num_rollouts):
+                text_prompts.append(text)
+                prompt_indices.append(idx)
+
+        total = len(text_prompts)
+        print(f"Generating {total} rollouts for {len(prompts)} prompts across {dp} GPUs...")
+
+        sp_kwargs = dict(temperature=args.temperature, max_tokens=args.max_tokens, top_p=0.95)
+        tmp_dir = tempfile.mkdtemp(prefix="dp_rollout_")
+
+        # Split text prompts across GPUs
+        shard_size = (total + dp - 1) // dp
+        worker_args = []
+        for i in range(dp):
+            shard = text_prompts[i * shard_size : (i + 1) * shard_size]
+            if shard:
+                out_file = os.path.join(tmp_dir, f"shard_{i}.pkl")
+                worker_args.append((i, args.model, shard, sp_kwargs,
+                                    args.gpu_memory_utilization, out_file))
+
+        start = time.time()
+        ctx = mp.get_context("spawn")
+        processes = []
+        for wa in worker_args:
+            p = ctx.Process(target=_dp_rollout_worker, args=(wa,))
+            p.daemon = False
+            processes.append(p)
+        for p in processes:
+            p.start()
+        for p in processes:
+            p.join()
+
+        # Merge results in order
+        all_generated = []
+        for wa in worker_args:
+            out_file = wa[-1]
+            with open(out_file, "rb") as f:
+                all_generated.extend(pickle.load(f))
+            os.remove(out_file)
+        os.rmdir(tmp_dir)
+
+        elapsed = time.time() - start
+        print(f"Generation completed in {elapsed:.1f}s")
+
+        # Group outputs by prompt
+        results = []
+        for prompt_idx, p in enumerate(prompts):
+            rollout_responses = []
+            for out_idx in range(len(all_generated)):
+                if prompt_indices[out_idx] == prompt_idx:
+                    generated_text = all_generated[out_idx]
+                    if think_seed:
+                        full_response = "<think>\n" + generated_text
+                    else:
+                        full_response = generated_text
+                    rollout_responses.append(full_response)
+            record = {
+                "prompt": p["prompt"],
+                "reference_answer": p["reference_answer"],
+                "chosen": p["chosen"],
+                "rollouts": rollout_responses,
+            }
+            if "test_case" in p:
+                record["test_case"] = p["test_case"]
+            if "source" in p:
+                record["source"] = p["source"]
+            results.append(record)
+    else:
+        # ---- Single-instance rollout (original path) ----
+        results = run_rollouts(
+            prompts=prompts,
+            model_name=args.model,
+            num_rollouts=args.num_rollouts,
+            max_tokens=args.max_tokens,
+            temperature=args.temperature,
+            tensor_parallel_size=args.tensor_parallel_size,
+            gpu_memory_utilization=args.gpu_memory_utilization,
+            use_chat_template=args.chat_template,
+            think_seed=not args.no_think_seed,
+        )
+
+    mode = "a" if args.append else "w"
+    with open(args.output, mode) as f:
         for r in results:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
-
-    print(f"Saved {len(results)} rollout results to {args.output}")
+    print(f"Saved {len(results)} rollout results to {args.output} (mode={'append' if args.append else 'write'})")
 
 
 if __name__ == "__main__":

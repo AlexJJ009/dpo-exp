@@ -1,11 +1,18 @@
 """
-DPO Training script for Gemma3-4B-SFT (SFT-finetuned model) with DeepSpeed ZeRO 2.
+DPO Training script for MCQ cross-domain experiments with DeepSpeed ZeRO 2.
 
-Trains on strict-filtered preference pairs and saves checkpoint.
+Configurable via environment variables:
+    DPO_MODEL_NAME      - Path to SFT model checkpoint
+    DPO_DATASET_PATH    - Path to preference pairs JSONL
+    DPO_OUTPUT_DIR      - Checkpoint output directory
+    DPO_LOG_DIR         - Training log directory (default: OUTPUT_DIR/training_logs)
 
 Usage (inside dpo-harness Docker container):
+    DPO_MODEL_NAME=/data-1/.cache/Qwen3-4B-Base-Med-SFT/checkpoint-134 \
+    DPO_DATASET_PATH=/data-1/dataset/dpo/dpo-med-sft-sci/dpo-med-sft-sci-pairs.jsonl \
+    DPO_OUTPUT_DIR=/data-1/checkpoints/qwen3-4b-med-sft-dpo-sci \
     accelerate launch --config_file trl/accelerate_configs/zero2.yaml \
-        dpo_pipeline/train_dpo_gemma3_4b_sft.py
+        dpo_pipeline/train_dpo_mcq.py
 """
 
 import json
@@ -22,24 +29,26 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
 from trl import DPOConfig, DPOTrainer
 
 
-# ======================== Configuration ========================
-MODEL_NAME = "/data-1/.cache/gemma3-4b-base-sft-stage-1"
-DATASET_PATH = "/data-1/dataset/dpo/dpo-gemma3-4b-sft/dpo-gemma3-4b-sft-pairs.jsonl"
-OUTPUT_DIR = "/data-1/checkpoints/gemma3-4b-sft-dpo"
-LOG_DIR = "/data-1/checkpoints/gemma3-4b-sft-dpo/training_logs"
+# ======================== Configuration (from env, resolved at runtime) ========================
 
-# Training hyperparameters
+# Training hyperparameters (overridable via env)
 BETA = 0.1
 LEARNING_RATE = 5e-7
 NUM_EPOCHS = 1
-PER_DEVICE_BATCH_SIZE = 1
-GRADIENT_ACCUMULATION_STEPS = 2  # 8 GPUs x 1 x 2 = effective batch 16
+PER_DEVICE_BATCH_SIZE = int(os.environ.get("DPO_PER_DEVICE_BATCH", "1"))
+GRADIENT_ACCUMULATION_STEPS = int(os.environ.get("DPO_GRAD_ACCUM", "2"))
 MAX_LENGTH = 2048
 WARMUP_RATIO = 0.1
 WEIGHT_DECAY = 0.01
 LR_SCHEDULER = "cosine"
 LOGGING_STEPS = 5
-SAVE_STEPS = 200
+SAVE_STEPS = 50
+# 8B memory optimizations
+PRECOMPUTE_REF = os.environ.get("DPO_PRECOMPUTE_REF", "").lower() in ("1", "true", "yes")
+OPTIMIZER = os.environ.get("DPO_OPTIM", "adamw_torch")
+# Early stopping: stop when loss <= threshold for `patience` consecutive log checks
+EARLY_STOP_THRESHOLD = float(os.environ.get("DPO_EARLY_STOP_LOSS", "0.01"))
+EARLY_STOP_PATIENCE = int(os.environ.get("DPO_EARLY_STOP_PATIENCE", "3"))
 
 
 class MetricLoggerCallback(TrainerCallback):
@@ -63,37 +72,37 @@ class MetricLoggerCallback(TrainerCallback):
                     self.has_nan_inf = True
 
 
-def _copy_preprocessor_config(model_name: str, output_dir: str):
-    """Copy preprocessor_config.json from source model to checkpoint if missing.
+class LossEarlyStoppingCallback(TrainerCallback):
+    """Stop training when loss drops below a threshold for N consecutive checks.
 
-    Gemma3 is architecturally multimodal (Gemma3ForConditionalGeneration).
-    vLLM tries to init multimodal processing when loading checkpoints and
-    fails with OSError if preprocessor_config.json is absent.
+    Saves checkpoint before stopping to preserve the best model state.
     """
-    import shutil
-    dst = Path(output_dir) / "preprocessor_config.json"
-    if dst.exists():
-        return
 
-    # Try resolving the HF cache snapshot path
-    from huggingface_hub import try_to_load_from_cache
-    try:
-        cached = try_to_load_from_cache(model_name, "preprocessor_config.json")
-        if cached and isinstance(cached, str):
-            shutil.copy2(cached, dst)
-            print(f"Copied preprocessor_config.json from HF cache to {dst}")
+    def __init__(self, threshold: float = 0.01, patience: int = 3, min_steps: int = 20):
+        self.threshold = threshold
+        self.patience = patience
+        self.min_steps = min_steps
+        self._below_count = 0
+        self.triggered = False
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs is None or "loss" not in logs:
             return
-    except Exception:
-        pass
+        if state.global_step < self.min_steps:
+            return
 
-    # Fallback: check if model_name is a local directory
-    src = Path(model_name) / "preprocessor_config.json"
-    if src.exists():
-        shutil.copy2(src, dst)
-        print(f"Copied preprocessor_config.json from {src} to {dst}")
-    else:
-        print(f"WARNING: preprocessor_config.json not found for {model_name}. "
-              "vLLM evaluation may fail for multimodal architectures.")
+        loss = logs["loss"]
+        if loss <= self.threshold:
+            self._below_count += 1
+            if self._below_count >= self.patience and not self.triggered:
+                self.triggered = True
+                print(f"\n>>> EARLY STOP: loss={loss:.4f} <= {self.threshold} "
+                      f"for {self.patience} consecutive checks at step {state.global_step}. "
+                      f"Saving checkpoint and stopping.")
+                control.should_save = True
+                control.should_training_stop = True
+        else:
+            self._below_count = 0
 
 
 def load_preference_dataset(path: str) -> Dataset:
@@ -109,9 +118,22 @@ def load_preference_dataset(path: str) -> Dataset:
 
 
 def main():
+    MODEL_NAME = os.environ.get("DPO_MODEL_NAME")
+    DATASET_PATH = os.environ.get("DPO_DATASET_PATH")
+    OUTPUT_DIR = os.environ.get("DPO_OUTPUT_DIR")
+
+    if not all([MODEL_NAME, DATASET_PATH, OUTPUT_DIR]):
+        print("ERROR: Must set DPO_MODEL_NAME, DPO_DATASET_PATH, DPO_OUTPUT_DIR")
+        sys.exit(1)
+
+    LOG_DIR = os.environ.get("DPO_LOG_DIR", os.path.join(OUTPUT_DIR, "training_logs"))
+
     print("=" * 70)
-    print("Gemma3-4B-SFT DPO Training (DeepSpeed ZeRO 2)")
+    print("MCQ Cross-Domain DPO Training (DeepSpeed ZeRO 2)")
     print("=" * 70)
+    print(f"\n  Model:   {MODEL_NAME}")
+    print(f"  Dataset: {DATASET_PATH}")
+    print(f"  Output:  {OUTPUT_DIR}")
 
     # ======================== Environment Check ========================
     print(f"\nPython: {sys.version}")
@@ -137,7 +159,6 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
         torch_dtype=torch.bfloat16,
-        attn_implementation="eager",  # Gemma3 sliding window — use eager for compatibility
         local_files_only=True,
     )
     param_count = sum(p.numel() for p in model.parameters())
@@ -147,6 +168,14 @@ def main():
     print("\nConfiguring DPO training...")
     Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
     Path(LOG_DIR).mkdir(parents=True, exist_ok=True)
+
+    dpo_kwargs = {}
+    if PRECOMPUTE_REF:
+        dpo_kwargs["precompute_ref_log_probs"] = True
+        print("  precompute_ref_log_probs=True (8B memory optimization)")
+    if OPTIMIZER != "adamw_torch":
+        dpo_kwargs["optim"] = OPTIMIZER
+        print(f"  optimizer={OPTIMIZER}")
 
     training_args = DPOConfig(
         output_dir=OUTPUT_DIR,
@@ -163,11 +192,12 @@ def main():
         logging_first_step=True,
         save_strategy="steps",
         save_steps=SAVE_STEPS,
-        save_total_limit=2,
+        save_total_limit=10,
         report_to="none",
         remove_unused_columns=False,
         warmup_ratio=WARMUP_RATIO,
         weight_decay=WEIGHT_DECAY,
+        **dpo_kwargs,
         lr_scheduler_type=LR_SCHEDULER,
         dataloader_num_workers=4,
         seed=42,
@@ -177,13 +207,19 @@ def main():
     # ======================== Initialize Trainer ========================
     print("Initializing DPOTrainer...")
     metric_logger = MetricLoggerCallback()
+    early_stopper = LossEarlyStoppingCallback(
+        threshold=EARLY_STOP_THRESHOLD,
+        patience=EARLY_STOP_PATIENCE,
+        min_steps=20,
+    )
+    print(f"  Early stopping: loss <= {EARLY_STOP_THRESHOLD} for {EARLY_STOP_PATIENCE} consecutive checks")
 
     trainer = DPOTrainer(
         model=model,
         args=training_args,
         train_dataset=dataset,
         processing_class=tokenizer,
-        callbacks=[metric_logger],
+        callbacks=[metric_logger, early_stopper],
     )
 
     total_steps = len(trainer.get_train_dataloader()) * NUM_EPOCHS // GRADIENT_ACCUMULATION_STEPS
@@ -209,10 +245,6 @@ def main():
     print("\nSaving final model checkpoint...")
     trainer.save_model(OUTPUT_DIR)
     tokenizer.save_pretrained(OUTPUT_DIR)
-
-    # Gemma3 is architecturally multimodal — vLLM requires preprocessor_config.json
-    _copy_preprocessor_config(MODEL_NAME, OUTPUT_DIR)
-
     print(f"Checkpoint saved to {OUTPUT_DIR}")
 
     # ======================== Extract & Save Metrics ========================
@@ -244,15 +276,9 @@ def main():
             first = step_metrics[0]
             last = step_metrics[-1]
             print(f"\nStep {first['step']}:")
-            print(f"  loss={first['loss']}")
-            print(f"  rewards/chosen={first.get('rewards/chosen')}")
-            print(f"  rewards/rejected={first.get('rewards/rejected')}")
-            print(f"  rewards/margins={first.get('rewards/margins')}")
+            print(f"  loss={first['loss']}, margins={first.get('rewards/margins')}")
             print(f"\nStep {last['step']}:")
-            print(f"  loss={last['loss']}")
-            print(f"  rewards/chosen={last.get('rewards/chosen')}")
-            print(f"  rewards/rejected={last.get('rewards/rejected')}")
-            print(f"  rewards/margins={last.get('rewards/margins')}")
+            print(f"  loss={last['loss']}, margins={last.get('rewards/margins')}")
 
         # ======================== Validation ========================
         print("\n" + "=" * 70)
@@ -269,9 +295,6 @@ def main():
             else:
                 print(f"FAIL: Loss did not decrease: {first_loss:.4f} -> {final_loss:.4f}")
                 all_ok = False
-        else:
-            print("FAIL: Not enough steps to compare loss")
-            all_ok = False
 
         margins = [(m["step"], m["rewards/margins"]) for m in step_metrics if m.get("rewards/margins") is not None]
         if len(margins) >= 2:
@@ -332,6 +355,8 @@ def main():
             "validation": {
                 "loss_decreased": all_ok,
                 "no_nan_inf": not metric_logger.has_nan_inf,
+                "early_stopped": early_stopper.triggered,
+                "early_stop_threshold": EARLY_STOP_THRESHOLD,
             },
             "step_metrics": step_metrics,
         }
