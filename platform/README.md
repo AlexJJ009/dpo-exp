@@ -1,60 +1,58 @@
 # Platform Deployment Guide
 
-## 1. Build Custom Image
+## 1. Upload Wheels to DolphinFS
 
-On the platform's image builder, select a base image with Python 3.12 + CUDA 12.6.
-
-Paste the content of `dockerfile_instructions.txt` into the Dockerfile instructions field.
-
-Do NOT add the "Conda" software package (it overwrites Python 3.12 with 3.11).
-
-## 2. Directory Layout on DolphinFS
-
-```
-/mnt/dolphinfs/.../lgx/
-├── dpo-exp/                    <- git clone the repo here
-├── dataset/                    <- training data + test benchmarks
-│   ├── code/                   <- code-train.jsonl, example.json
-│   ├── EnsembleLLM-data-processed/
-│   │   ├── HumanEval/test.jsonl
-│   │   ├── MBPP/test.jsonl
-│   │   └── BigCodeBench/test.jsonl
-│   └── dpo/                    <- DPO intermediates (auto-created)
-├── .cache/                     <- model weights (e.g. Qwen3-4B-Base-Code-SFT/)
-└── checkpoints/                <- training outputs (auto-created)
-```
-
-## 3. Setup Steps
+On this machine (has internet), the wheels are pre-downloaded in `platform/wheels/` (23MB).
+Upload them to your DolphinFS path:
 
 ```bash
-# 1. Clone repo
-cd /mnt/dolphinfs/.../lgx
-git clone <repo-url> dpo-exp
+# From this machine, copy to DolphinFS (adjust the target path)
+scp -r platform/wheels/ <dolphinfs-host>:/mnt/dolphinfs/.../lgx/dpo-wheels/
+```
 
-# 2. Copy data and model weights to the directory layout above
+Or from a Jupyter session on the platform:
+```bash
+# If you can access this machine from the platform
+rsync -av <this-machine>:/data-1/dpo-experiment/platform/wheels/ /mnt/dolphinfs/.../lgx/dpo-wheels/
+```
 
-# 3. Copy platform files to hope_dir
-cp dpo-exp/platform/jupyter.sh  hope_dir/jupyter.sh
-cp dpo-exp/platform/run.hope    hope_dir/run.hope
+## 2. Build Custom Image
 
-# 4. Edit jupyter.sh: set LGX_DIR to your actual path
-# 5. Edit run.hope:   set docker image name to your custom image
+1. Select a base image that **already has vllm 0.12.0 + torch** (check other people's images)
+2. Do NOT add "Conda" software package
+3. Paste the content of `dockerfile_instructions.txt` into Dockerfile instructions
+4. **Edit the path** in the first RUN line to match your DolphinFS wheels location
+
+Note: `deepspeed` is not in the wheels (needs compilation). Install it at runtime
+in `jupyter.sh` if your base image doesn't have it, or skip it if the base image
+already includes it.
+
+## 3. Directory Layout
+
+```
+lgx/
+├── dpo-exp/          <- git clone the repo
+├── dpo-wheels/       <- uploaded wheel files (23MB)
+├── dataset/
+│   ├── code/code-train.jsonl
+│   └── EnsembleLLM-data-processed/HumanEval/test.jsonl ...
+├── .cache/Qwen3-4B-Base-Code-SFT/checkpoint-38/
+└── checkpoints/      <- auto-created
 ```
 
 ## 4. Run
 
-Submit the job via `run.hope`. The platform will:
-1. Allocate GPU nodes
-2. Start the container with your custom image
-3. Run `jupyter.sh`, which:
-   - Starts Jupyter Lab in background (for monitoring)
-   - Runs the DPO pipeline via `experiments/run_4b_code_sft_code.sh`
+Edit `jupyter.sh`: set `LGX_DIR` to your actual DolphinFS path.
+Edit `run.hope`: set the docker image to your custom-built image.
 
-## 5. Key Differences from Local Machine
+Submit the job. The pipeline runs automatically.
 
-| | Local (this machine) | Platform |
-|--|--|--|
-| Execution | `docker run` wraps each step | Direct execution inside container |
-| `USE_DOCKER` | `1` (auto-detected) | `0` (set in jupyter.sh) |
-| Base path | `/data-1` | `/mnt/dolphinfs/.../lgx` |
-| GPU allocation | All GPUs always available | Managed by YARN/run.hope |
+## 5. What's in the Wheels
+
+Only packages NOT in typical sglang/vllm base images (23MB total):
+- trl 0.29.0 + accelerate + datasets
+- math-verify + latex2sympy2-extended + pylatexenc
+- Small dependencies (httpx, rich, etc.)
+
+Packages expected from base image (NOT included):
+- torch, transformers, tokenizers, numpy, vllm
