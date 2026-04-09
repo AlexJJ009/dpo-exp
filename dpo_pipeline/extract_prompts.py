@@ -83,12 +83,12 @@ def main():
     parser = argparse.ArgumentParser(description="Extract prompts from EnsembleLLM dataset")
     parser.add_argument(
         "--input",
-        default="/data-1/dataset/EnsembleLLM-data/am_deepseek_r1_filtered_ad.jsonl",
+        required=True,
         help="Path to source JSONL file",
     )
     parser.add_argument(
         "--output",
-        default="/data-1/dataset/extracted_prompts.jsonl",
+        required=True,
         help="Path to output JSONL file",
     )
     parser.add_argument(

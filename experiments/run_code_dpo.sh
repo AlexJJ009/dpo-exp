@@ -53,7 +53,7 @@ DPO_PRECOMPUTE_REF="${DPO_PRECOMPUTE_REF:-}"
 DPO_OPTIM="${DPO_OPTIM:-adamw_torch}"
 
 # ==================== Derived paths ====================
-DATA_DIR="/data-1/dataset/dpo/${EXP_NAME}"
+DATA_DIR="${DPO_WORK_DIR}/${EXP_NAME}"
 ROLLOUTS_PATH="${DATA_DIR}/${EXP_NAME}-rollouts.jsonl"
 PAIRS_PATH="${DATA_DIR}/${EXP_NAME}-pairs.jsonl"
 TRAINING_SUMMARY="${CHECKPOINT_DIR}/training_logs/training_summary.json"
@@ -168,8 +168,8 @@ run_pipeline() {
 
       # Rollout this batch
       docker run --rm --gpus all --ipc=host \
-        -v /data-1:/data-1 \
-        -w /data-1/dpo-experiment \
+        -v "${BASE_DIR}:${BASE_DIR}" \
+        -w "${REPO_DIR}" \
         dpo-harness \
         python dpo_pipeline/batch_rollout.py \
           --input "${TRAIN_DATA}" \
@@ -188,8 +188,8 @@ run_pipeline() {
 
       # Build pairs with code verification
       docker run --rm --gpus all --ipc=host \
-        -v /data-1:/data-1 \
-        -w /data-1/dpo-experiment \
+        -v "${BASE_DIR}:${BASE_DIR}" \
+        -w "${REPO_DIR}" \
         dpo-harness \
         python dpo_pipeline/build_pairs.py \
           --input "${ROLLOUTS_PATH}" \
@@ -224,8 +224,8 @@ run_pipeline() {
     echo ">>> SKIP: Training already completed"
   else
     docker run --rm --gpus all --ipc=host \
-      -v /data-1:/data-1 \
-      -w /data-1/dpo-experiment \
+      -v "${BASE_DIR}:${BASE_DIR}" \
+      -w "${REPO_DIR}" \
       -e DPO_MODEL_NAME="${MODEL}" \
       -e DPO_DATASET_PATH="${PAIRS_PATH}" \
       -e DPO_OUTPUT_DIR="${CHECKPOINT_DIR}" \
@@ -291,8 +291,8 @@ print(f\"  Runtime:  {r['training_runtime_seconds']:.0f}s\")
 
       echo "--- Evaluating: ${ds_name} ---"
       docker run --rm --gpus all --ipc=host \
-        -v /data-1:/data-1 \
-        -w /data-1/dpo-experiment \
+        -v "${BASE_DIR}:${BASE_DIR}" \
+        -w "${REPO_DIR}" \
         dpo-harness \
         python dpo_pipeline/eval_vllm_code.py \
           --dataset "${tf}" \

@@ -54,7 +54,7 @@ DPO_PRECOMPUTE_REF="${DPO_PRECOMPUTE_REF:-}"
 DPO_OPTIM="${DPO_OPTIM:-adamw_torch}"
 
 # ==================== Derived paths ====================
-DATA_DIR="/data-1/dataset/dpo/${EXP_NAME}"
+DATA_DIR="${DPO_WORK_DIR}/${EXP_NAME}"
 ROLLOUTS_PATH="${DATA_DIR}/${EXP_NAME}-rollouts.jsonl"
 PAIRS_PATH="${DATA_DIR}/${EXP_NAME}-pairs.jsonl"
 EVAL_OUTPUT_DIR="${CHECKPOINT_DIR}/inference_n${EVAL_N}"
@@ -70,28 +70,19 @@ preflight() {
 
   local ok=true
 
-  for img in dpo-harness verl-harness:latest; do
-    if docker image inspect "${img}" &>/dev/null; then
-      echo "  [OK] Docker image '${img}'"
-    else
-      echo "  [FAIL] Docker image '${img}' not found"
-      ok=false
-    fi
-  done
-
-  echo ""
-  if docker run --rm dpo-harness python -c "
-import trl; print(f'  [OK] trl=={trl.__version__}')
-import deepspeed; print(f'  [OK] deepspeed=={deepspeed.__version__}')
-" 2>/dev/null; then true; else
-    echo "  [FAIL] dpo-harness dependency check"
+  if docker image inspect "${DOCKER_IMAGE}" &>/dev/null; then
+    echo "  [OK] Docker image '${DOCKER_IMAGE}'"
+  else
+    echo "  [FAIL] Docker image '${DOCKER_IMAGE}' not found"
     ok=false
   fi
 
-  if docker run --rm -v /data-1:/data-1 \
-    -e PYTHONPATH=/data-1/verl07/verl verl-harness:latest \
-    python -c "import verl; print('  [OK] verl module')" 2>/dev/null; then true; else
-    echo "  [FAIL] verl module"
+  echo ""
+  if docker run --rm "${DOCKER_IMAGE}" python -c "
+import trl; print(f'  [OK] trl=={trl.__version__}')
+import deepspeed; print(f'  [OK] deepspeed=={deepspeed.__version__}')
+" 2>/dev/null; then true; else
+    echo "  [FAIL] ${DOCKER_IMAGE} dependency check"
     ok=false
   fi
 
@@ -182,9 +173,9 @@ run_pipeline() {
 
       # Rollout this batch (append to rollouts file)
       docker run --rm --gpus all --ipc=host \
-        -v /data-1:/data-1 \
-        -w /data-1/dpo-experiment \
-        dpo-harness \
+        -v "${BASE_DIR}:${BASE_DIR}" \
+        -w "${REPO_DIR}" \
+        "${DOCKER_IMAGE}" \
         python dpo_pipeline/batch_rollout.py \
           --input "${TRAIN_DATA}" \
           --output "${ROLLOUTS_PATH}" \
@@ -203,9 +194,9 @@ run_pipeline() {
 
       # Build pairs from ALL accumulated rollouts (with dedup)
       docker run --rm --gpus all --ipc=host \
-        -v /data-1:/data-1 \
-        -w /data-1/dpo-experiment \
-        dpo-harness \
+        -v "${BASE_DIR}:${BASE_DIR}" \
+        -w "${REPO_DIR}" \
+        "${DOCKER_IMAGE}" \
         python dpo_pipeline/build_pairs.py \
           --input "${ROLLOUTS_PATH}" \
           --output "${PAIRS_PATH}" \
@@ -240,8 +231,8 @@ run_pipeline() {
     echo ">>> SKIP: Training already completed"
   else
     docker run --rm --gpus all --ipc=host \
-      -v /data-1:/data-1 \
-      -w /data-1/dpo-experiment \
+      -v "${BASE_DIR}:${BASE_DIR}" \
+      -w "${REPO_DIR}" \
       -e DPO_MODEL_NAME="${MODEL}" \
       -e DPO_DATASET_PATH="${PAIRS_PATH}" \
       -e DPO_OUTPUT_DIR="${CHECKPOINT_DIR}" \
@@ -249,7 +240,7 @@ run_pipeline() {
       -e DPO_GRAD_ACCUM="${DPO_GRAD_ACCUM}" \
       -e DPO_PRECOMPUTE_REF="${DPO_PRECOMPUTE_REF}" \
       -e DPO_OPTIM="${DPO_OPTIM}" \
-      dpo-harness \
+      "${DOCKER_IMAGE}" \
       accelerate launch --config_file trl/accelerate_configs/zero2.yaml \
         dpo_pipeline/train_dpo_mcq.py
 
@@ -288,9 +279,9 @@ print(f\"  Runtime:  {r['training_runtime_seconds']:.0f}s\")
     done
 
     docker run --rm --gpus all --ipc=host \
-      -v /data-1:/data-1 \
-      -w /data-1/dpo-experiment \
-      dpo-harness \
+      -v "${BASE_DIR}:${BASE_DIR}" \
+      -w "${REPO_DIR}" \
+      "${DOCKER_IMAGE}" \
       python dpo_pipeline/eval/offline_eval.py \
           --model_path "${CHECKPOINT_DIR}" \
           --test_files ${test_args} \

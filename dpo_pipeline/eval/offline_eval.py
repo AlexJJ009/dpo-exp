@@ -206,10 +206,8 @@ def main():
     parser.add_argument("--max_tokens", type=int, default=4096)
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.85)
     parser.add_argument("--output_dir", type=str, required=True)
-    parser.add_argument("--test_files", type=str, nargs="+", default=[
-        "/data-1/dataset/MATH-500/math500-test.parquet",
-        "/data-1/dataset/AIME-2025/aime-2025.parquet",
-    ])
+    parser.add_argument("--test_files", type=str, nargs="+", required=True,
+                        help="Parquet test files to evaluate on")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--data_parallel", type=int, default=1,
                         help="Number of GPUs for data parallelism (each runs TP=1). "

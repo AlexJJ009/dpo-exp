@@ -20,7 +20,7 @@ from extract_prompts import extract_from_sample
 
 def main():
     parser = argparse.ArgumentParser(description="Extract prompts with offset")
-    parser.add_argument("--input", default="/data-1/dataset/EnsembleLLM-data/am_deepseek_r1_filtered_ad.jsonl")
+    parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--offset", type=int, default=0, help="Number of valid samples to skip")
     parser.add_argument("--limit", type=int, default=None, help="Max samples to extract after offset")

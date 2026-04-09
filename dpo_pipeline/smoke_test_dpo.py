@@ -191,7 +191,7 @@ def main():
         "final_loss": final_loss,
         "per_step_losses": losses,
     }
-    summary_path = "/data-1/dpo-experiment/dpo_pipeline/smoke_test_results.json"
+    summary_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "smoke_test_results.json")
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
     print(f"\nResults saved to {summary_path}")

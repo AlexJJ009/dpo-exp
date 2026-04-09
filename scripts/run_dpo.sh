@@ -3,24 +3,19 @@
 # run_dpo.sh — Launch a dpo-harness training container
 #
 # Usage:
-#   bash /data-1/dpo-experiment/run_dpo.sh                        # interactive shell
-#   bash /data-1/dpo-experiment/run_dpo.sh <script.py> [args...]  # run a script
+#   bash scripts/run_dpo.sh                           # interactive shell
+#   bash scripts/run_dpo.sh <command> [args...]       # run a command
 #
 # Examples:
-#   # Interactive shell (all GPUs)
-#   bash /data-1/dpo-experiment/run_dpo.sh
-#
-#   # Run smoke test
-#   bash /data-1/dpo-experiment/run_dpo.sh \
-#       python /data-1/dpo-experiment/dpo_pipeline/smoke_test_dpo.py
-#
-#   # Use specific GPUs
-#   GPUS='"device=0,1,2,3"' bash /data-1/dpo-experiment/run_dpo.sh
+#   bash scripts/run_dpo.sh
+#   bash scripts/run_dpo.sh python dpo_pipeline/smoke_test_dpo.py
+#   GPUS='"device=0,1,2,3"' bash scripts/run_dpo.sh
 # ==============================================================================
 
 set -euo pipefail
+source "$(dirname "$0")/config.sh"
 
-IMAGE_NAME="dpo-harness"
+IMAGE_NAME="${DOCKER_IMAGE}"
 GPUS="${GPUS:-all}"
 
 # Verify image exists
@@ -34,14 +29,15 @@ DOCKER_ARGS=(
     docker run --rm
     --gpus "$GPUS"
     --ipc=host
-    -v /data-1:/data-1
-    -e HF_HOME=/data-1/.cache/huggingface
-    -e HF_HUB_CACHE=/data-1/.cache/huggingface
+    -v "${BASE_DIR}:${BASE_DIR}"
+    -w "${REPO_DIR}"
+    -e HF_HOME="${CACHE_DIR}/huggingface"
+    -e HF_HUB_CACHE="${CACHE_DIR}/huggingface"
     -e HF_HUB_OFFLINE=1
-    -e PIP_CACHE_DIR=/data-1/.cache/pip
-    -e TORCH_HOME=/data-1/.cache/torch
-    -e UV_CACHE_DIR=/data-1/.cache/uv
-    -e TRITON_CACHE_DIR=/data-1/.cache/triton
+    -e PIP_CACHE_DIR="${CACHE_DIR}/pip"
+    -e TORCH_HOME="${CACHE_DIR}/torch"
+    -e UV_CACHE_DIR="${CACHE_DIR}/uv"
+    -e TRITON_CACHE_DIR="${CACHE_DIR}/triton"
 )
 
 if [ $# -eq 0 ]; then

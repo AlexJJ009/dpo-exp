@@ -30,8 +30,9 @@ import sys
 import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DATASET_DIR = "/data-1/dataset"
-DPO_DIR = os.path.join(DATASET_DIR, "dpo")
+_BASE_DIR = os.path.dirname(os.path.dirname(SCRIPT_DIR))  # repo -> base
+DATASET_DIR = os.environ.get("DATASET_DIR", os.path.join(_BASE_DIR, "dataset"))
+DPO_DIR = os.environ.get("DPO_WORK_DIR", os.path.join(DATASET_DIR, "dpo"))
 SOURCE_DATA = os.path.join(DATASET_DIR, "EnsembleLLM-data", "am_deepseek_r1_filtered_ad.jsonl")
 
 

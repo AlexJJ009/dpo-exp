@@ -25,14 +25,18 @@ Usage:
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
 
 import pandas as pd
 
-SOURCE_DIR = Path("/data-1/dataset/EnsembleLLM-data-processed")
-OUTPUT_DIR = Path("/data-1/dataset")
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_BASE_DIR = _SCRIPT_DIR.parent.parent  # repo -> base
+
+SOURCE_DIR = Path(os.environ.get("DATASET_DIR", _BASE_DIR / "dataset")) / "EnsembleLLM-data-processed"
+OUTPUT_DIR = Path(os.environ.get("DATASET_DIR", _BASE_DIR / "dataset"))
 
 # Format instruction appended to every user prompt
 CODE_FORMAT_SUFFIX = (
