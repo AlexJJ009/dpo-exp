@@ -143,28 +143,33 @@ cd "${REPO_DIR}"
 pwd
 ls -la | head -20
 
-# ==================== Section 7: Install wheels (with full pip output) ====================
-section "install wheels"
-MARKER="${LGX_DIR}/.deps_installed"
-if [ ! -f "${MARKER}" ]; then
-  if [ ! -d "${WHEELS_DIR}" ] || [ -z "$(ls -A ${WHEELS_DIR}/*.whl 2>/dev/null)" ]; then
-    echo "FATAL: no wheels in ${WHEELS_DIR}"
-    exit 11
+# ==================== Section 7: Per-package dependency check ====================
+section "dependency check"
+# Never blindly overwrite image-shipped libs with wheels -- a vllm/torch ABI mismatch
+# is very hard to recover from. Check each target package individually and only
+# install what's actually missing.
+check() { python3 -c "import $1" 2>/dev/null; }
+
+for pkg in vllm trl transformers torch accelerate; do
+  if check "$pkg"; then
+    ver=$(python3 -c "import ${pkg}; print(${pkg}.__version__)" 2>/dev/null)
+    echo "  [present] ${pkg} == ${ver}"
+  else
+    echo "  [MISSING] ${pkg}"
   fi
-  echo "Installing $(ls ${WHEELS_DIR}/*.whl | wc -l) wheels (no | tail, show full output) ..."
-  pip install --no-cache-dir --no-deps "${WHEELS_DIR}"/*.whl
-  echo "--- verifying imports ---"
-  python3 -c "
-import vllm, trl, deepspeed
-print(f'vLLM: {vllm.__version__}')
-print(f'TRL: {trl.__version__}')
-print(f'DeepSpeed: {deepspeed.__version__}')
-"
-  touch "${MARKER}"
-  echo "Dependencies installed + verified; marker written to ${MARKER}"
+done
+
+# Deepspeed is often absent from training images; install from internal mirror if so.
+if ! check deepspeed; then
+  echo "deepspeed missing, trying internal PyPI mirror ..."
+  pip install --no-cache-dir -i https://pypi.sankuai.com/simple deepspeed 2>&1 | tail -20 || true
+  if ! check deepspeed; then
+    echo "WARN: deepspeed install failed -- DPO step will likely fail, continuing for diagnostics."
+  else
+    python3 -c "import deepspeed; print('  deepspeed installed:', deepspeed.__version__)"
+  fi
 else
-  echo "Marker exists (${MARKER}); re-verifying imports only ..."
-  python3 -c "import vllm, trl, deepspeed; print(vllm.__version__, trl.__version__, deepspeed.__version__)"
+  python3 -c "import deepspeed; print('  [present] deepspeed ==', deepspeed.__version__)"
 fi
 
 # ==================== Section 8: Jupyter (background) ====================

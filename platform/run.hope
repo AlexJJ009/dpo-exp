@@ -23,7 +23,7 @@ afo.app.am.resource.mb = 4096
 with.tensor.board = false
 
 [docker]
-afo.docker.image.name = registry-offlinebiz.sankuai.com/custom_prod/com.sankuai.data.hadoop.gpu/ai-search/training_codelab_lmsysorg_sglang_dev_19d35de6:1.0.0
+afo.docker.image.name = registry-offlinebiz.sankuai.com/custom_prod/com.sankuai.phxmlp.mtjupyter.singleuser/shangou-alg_training_codelab_ubuntu22_cuda12.8_python3.12_torch2.8_trl_1.0.0_a0523d07:1.0.0
 
 [data]
 afo.data.prefetch = false
