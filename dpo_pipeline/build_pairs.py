@@ -112,9 +112,11 @@ def build_preference_pairs(rollouts_path: str, output_path: str, strict: bool = 
         "prompts_with_pairs": 0,
     }
 
+    if strict or code_mode:
+        stats["filtered_no_complete_answer"] = 0
+
     if strict:
         stats["filtered_no_think_tags"] = 0
-        stats["filtered_no_complete_answer"] = 0
         stats["filtered_no_mcq_format"] = 0
         stats["filtered_answer_not_verified_incorrect"] = 0
 

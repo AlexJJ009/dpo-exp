@@ -26,7 +26,10 @@ TP_SIZE="${TP_SIZE:-1}"
 DP_SIZE="${DP_SIZE:-8}"
 GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.9}"
 
-ROLLOUT_BATCH="${ROLLOUT_BATCH:-2000}"
+# Code tasks have high error rates (~40-60% of rollouts are wrong),
+# so fewer prompts are needed to reach TARGET_PAIRS.
+# 800 prompts × 16 rollouts × ~40% error ≈ 5000 pairs per batch.
+ROLLOUT_BATCH="${ROLLOUT_BATCH:-800}"
 TARGET_PAIRS="${TARGET_PAIRS:-8000}"
 MAX_ROLLOUT_BATCHES="${MAX_ROLLOUT_BATCHES:-10}"
 
@@ -39,6 +42,7 @@ DPO_PER_DEVICE_BATCH="${DPO_PER_DEVICE_BATCH:-1}"
 DPO_GRAD_ACCUM="${DPO_GRAD_ACCUM:-2}"
 DPO_PRECOMPUTE_REF="${DPO_PRECOMPUTE_REF:-}"
 DPO_OPTIM="${DPO_OPTIM:-adamw_torch}"
+DPO_MAX_PAIRS="${DPO_MAX_PAIRS:-${TARGET_PAIRS}}"
 
 # ==================== Derived paths ====================
 DATA_DIR="${DPO_WORK_DIR}/${EXP_NAME}"
@@ -151,7 +155,7 @@ run_pipeline() {
     echo ">>> SKIP: Training already completed"
   else
     run_cmd_env \
-      "-e DPO_MODEL_NAME=${MODEL} -e DPO_DATASET_PATH=${PAIRS_PATH} -e DPO_OUTPUT_DIR=${CHECKPOINT_DIR} -e DPO_PER_DEVICE_BATCH=${DPO_PER_DEVICE_BATCH} -e DPO_GRAD_ACCUM=${DPO_GRAD_ACCUM} -e DPO_PRECOMPUTE_REF=${DPO_PRECOMPUTE_REF} -e DPO_OPTIM=${DPO_OPTIM}" \
+      "-e DPO_MODEL_NAME=${MODEL} -e DPO_DATASET_PATH=${PAIRS_PATH} -e DPO_OUTPUT_DIR=${CHECKPOINT_DIR} -e DPO_PER_DEVICE_BATCH=${DPO_PER_DEVICE_BATCH} -e DPO_GRAD_ACCUM=${DPO_GRAD_ACCUM} -e DPO_PRECOMPUTE_REF=${DPO_PRECOMPUTE_REF} -e DPO_OPTIM=${DPO_OPTIM} -e DPO_MAX_PAIRS=${DPO_MAX_PAIRS}" \
       accelerate launch --config_file trl/accelerate_configs/zero2.yaml \
         dpo_pipeline/train_dpo_mcq.py
     echo ">>> Step 3 complete"

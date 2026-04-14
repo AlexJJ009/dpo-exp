@@ -49,6 +49,8 @@ OPTIMIZER = os.environ.get("DPO_OPTIM", "adamw_torch")
 # Early stopping: stop when loss <= threshold for `patience` consecutive log checks
 EARLY_STOP_THRESHOLD = float(os.environ.get("DPO_EARLY_STOP_LOSS", "0.01"))
 EARLY_STOP_PATIENCE = int(os.environ.get("DPO_EARLY_STOP_PATIENCE", "3"))
+# Max pairs: shuffle and truncate dataset to this size (0 = use all)
+MAX_PAIRS = int(os.environ.get("DPO_MAX_PAIRS", "0"))
 
 
 class MetricLoggerCallback(TrainerCallback):
@@ -149,6 +151,12 @@ def main():
     # ======================== Load Dataset ========================
     print("\nLoading dataset...")
     dataset = load_preference_dataset(DATASET_PATH)
+
+    if MAX_PAIRS > 0 and len(dataset) > MAX_PAIRS:
+        print(f"  Truncating: {len(dataset)} -> {MAX_PAIRS} pairs (shuffle + truncate)")
+        dataset = dataset.shuffle(seed=42).select(range(MAX_PAIRS))
+    elif MAX_PAIRS > 0:
+        print(f"  MAX_PAIRS={MAX_PAIRS}, but dataset only has {len(dataset)} — using all")
 
     # ======================== Load Model & Tokenizer ========================
     print(f"\nLoading model: {MODEL_NAME}")
