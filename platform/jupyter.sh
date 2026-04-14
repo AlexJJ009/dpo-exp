@@ -7,18 +7,24 @@ array_=(${IPS})
 IP=${array_[0]}
 
 # ---- Paths ----
-LGX_DIR="/mnt/dolphinfs/ssd_pool/docker/user/hadoop-ai-search/$(whoami)/lgx"
+LGX_DIR="/home/hadoop-ai-search/dolphinfs_ssd_hadoop-ai-search/yangfengkai02/lgx"
+WHEELS_DIR="${LGX_DIR}/dpo-wheels"
 export REPO_DIR="${LGX_DIR}/dpo-exp"
 export USE_DOCKER=0
 
 cd "${REPO_DIR}"
 
-# ---- Install deps at runtime (build env has no external PyPI access) ----
-echo "Installing dependencies ..."
-pip install --no-cache-dir vllm==0.12.0 "trl==0.29.0" "deepspeed==0.18.9" \
-    math-verify latex2sympy2-extended pylatexenc 2>&1 | tail -5
-echo "Verifying ..."
-python -c "import vllm; print(f'vLLM: {vllm.__version__}'); import trl; print(f'TRL: {trl.__version__}')"
+# ---- Install deps from local wheels (no network needed, ~30s) ----
+MARKER="${LGX_DIR}/.deps_installed"
+if [ ! -f "${MARKER}" ]; then
+  echo "Installing dependencies from local wheels ..."
+  pip install --no-cache-dir --no-deps ${WHEELS_DIR}/*.whl 2>&1 | tail -5
+  python -c "import vllm; print(f'vLLM: {vllm.__version__}'); import trl; print(f'TRL: {trl.__version__}')"
+  touch "${MARKER}"
+  echo "Dependencies installed."
+else
+  echo "Dependencies already installed (marker: ${MARKER})"
+fi
 
 # ---- Jupyter ----
 echo "Starting Jupyter on ${IP}:8420 ..."
