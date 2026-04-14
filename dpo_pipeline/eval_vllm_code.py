@@ -15,13 +15,10 @@ import tempfile
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-# System prompt for code generation tasks
-SYSTEM_PROMPT = (
-    "You are a helpful assistant. To answer the user's question, you first think "
-    "about the reasoning process and then provide the user with the answer. The "
-    "reasoning process and answer are enclosed within <think> and <answer> tags, "
-    "respectively, i.e., <think> reasoning process here </think> <answer> answer "
-    "here </answer>."
+# Format suffix appended to user prompts — must match prepare_code_dataset.py
+CODE_FORMAT_SUFFIX = (
+    "\n\nPlease reason step by step, and put your final solution code "
+    "in a Python code block (```python ... ```)."
 )
 
 
@@ -56,15 +53,22 @@ class VLLMBackend:
 # Prompt helper
 # -----------------------------
 def apply_chat_template(tokenizer, prompt: str, thinking: bool = False) -> str:
-    return tokenizer.apply_chat_template(
+    """Format prompt to match the training pipeline (no system prompt, with CODE_FORMAT_SUFFIX).
+
+    This must stay consistent with batch_rollout.py's format_prompt_with_chat_template
+    so the model sees the same format at eval time as during DPO rollout generation.
+    """
+    formatted = tokenizer.apply_chat_template(
         conversation=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
+            {"role": "user", "content": prompt + CODE_FORMAT_SUFFIX},
         ],
         tokenize=False,
         add_generation_prompt=True,
         enable_thinking=thinking,
     )
+    # Seed <think> to match rollout generation format
+    formatted += "<think>\n"
+    return formatted
 
 
 # -----------------------------
@@ -160,6 +164,18 @@ def load_code_dataset(path: str) -> List[Dict[str, Any]]:
         if not prompt.strip() or not test_code.strip():
             continue
 
+        # HumanEval format: test_code defines check(candidate) but never calls it.
+        # We need to append check(<entry_point>) so the assertions actually run.
+        if "def check(candidate):" in test_code and not re.search(r"^check\(", test_code, re.MULTILINE):
+            entry_point = ex.get("entry_point")
+            if not entry_point:
+                # Extract function name from the prompt (function signature)
+                fn_match = re.search(r"def\s+(\w+)\s*\(", prompt)
+                if fn_match:
+                    entry_point = fn_match.group(1)
+            if entry_point:
+                test_code = test_code.rstrip() + f"\n\ncheck({entry_point})\n"
+
         norm.append(
             {
                 "task_id": str(task_id),
@@ -175,35 +191,41 @@ def load_code_dataset(path: str) -> List[Dict[str, Any]]:
 # -----------------------------
 def extract_code(text: str) -> str:
     """Extract python code from model output."""
+    # Strip <think>...</think> content first so reasoning code doesn't leak in
+    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+
     # Priority 1: Extract code between [BEGIN] and [DONE] markers (for MBPP format)
-    begin_match = re.search(r"\[BEGIN\]\s*(.*?)\[DONE\]", text, flags=re.DOTALL)
+    begin_match = re.search(r"\[BEGIN\]\s*(.*?)\[DONE\]", cleaned, flags=re.DOTALL)
     if begin_match:
         code = begin_match.group(1).strip()
-        # Remove any test assertions that might have been included
-        lines = code.split('\n')
-        filtered_lines = [line for line in lines if not line.strip().startswith('assert ')]
-        return '\n'.join(filtered_lines).strip()
-    
-    # Priority 2: Fenced python code blocks
-    code_blocks = re.findall(r"```(?:python)?\s*(.*?)```", text, flags=re.DOTALL)
-    if code_blocks:
-        code = "\n\n".join(code_blocks).strip()
-        # Remove test assertions
         lines = code.split('\n')
         filtered_lines = [line for line in lines if not line.strip().startswith('assert ')]
         return '\n'.join(filtered_lines).strip()
 
-    # Priority 3: Content inside <answer>...</answer>
-    answer_match = re.search(r"<answer>(.*?)</answer>", text, flags=re.DOTALL)
+    # Priority 2: Content inside <answer>...</answer> (check before generic code blocks)
+    answer_match = re.search(r"<answer>(.*?)</answer>", cleaned, flags=re.DOTALL)
     if answer_match:
-        code = answer_match.group(1).strip()
-        # Remove test assertions
+        inner = answer_match.group(1).strip()
+        # Look for code blocks inside <answer>
+        inner_blocks = re.findall(r"```(?:python)?\s*(.*?)```", inner, flags=re.DOTALL)
+        if inner_blocks:
+            code = "\n\n".join(inner_blocks).strip()
+        else:
+            code = inner
+        lines = code.split('\n')
+        filtered_lines = [line for line in lines if not line.strip().startswith('assert ')]
+        return '\n'.join(filtered_lines).strip()
+
+    # Priority 3: Fenced python code blocks
+    code_blocks = re.findall(r"```(?:python)?\s*(.*?)```", cleaned, flags=re.DOTALL)
+    if code_blocks:
+        code = "\n\n".join(code_blocks).strip()
         lines = code.split('\n')
         filtered_lines = [line for line in lines if not line.strip().startswith('assert ')]
         return '\n'.join(filtered_lines).strip()
 
     # Last resort: return raw text but remove test assertions
-    lines = text.strip().split('\n')
+    lines = cleaned.strip().split('\n')
     filtered_lines = [line for line in lines if not line.strip().startswith('assert ')]
     return '\n'.join(filtered_lines).strip()
 
@@ -302,7 +324,9 @@ def evaluate(
 
     rows, passed = [], 0
     for ex, text, lat in zip(samples, preds, latencies):
-        code = extract_code(text)
+        # Prepend the <think> seed so extract_code can strip reasoning content
+        full_text = "<think>\n" + text
+        code = extract_code(full_text)
         ok, msg = run_python_test(code, ex["test_code"], timeout=timeout,
                                   test_type=ex.get("test_type", "function"))
         passed += int(ok)
@@ -311,7 +335,7 @@ def evaluate(
                 "task_id": ex["task_id"],
                 "orig_task_id": ex.get("orig_task_id", ex["task_id"]),
                 "prompt": ex["prompt"],
-                "pred_text": text.strip(),
+                "pred_text": full_text.strip(),
                 "code": code,
                 "passed": int(ok),
                 "test_msg": msg,
