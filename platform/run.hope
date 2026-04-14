@@ -1,5 +1,5 @@
 [base]
-afo.app.name = DPO-Code-4B-v2
+afo.app.name = DPO-Code-4B-debug-1gpu
 type = ml-easy-job
 
 [resource]
@@ -33,6 +33,6 @@ afo.app.support.engine.failover = true
 
 [others]
 client.git.revision.publish=false
-afo.app.env.YARN_CONTAINER_RUNTIME_DOCKER_SHM_SIZE_BYTES = 549755813888
+afo.app.env.YARN_CONTAINER_RUNTIME_DOCKER_SHM_SIZE_BYTES = 68719476736
 with_requirements = false
 afo.dolphinfs.otherusers = hadoop-mtsearch-assistant
