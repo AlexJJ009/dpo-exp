@@ -1,193 +1,149 @@
 #!/usr/bin/env bash
-# Heavily instrumented launcher. When debugging platform startup issues, the priority
-# is maximum visibility before any work starts. Once the pipeline is stable, strip
-# the DEBUG sections below.
-set -uxo pipefail
+# Launcher for the DPO smoke run on MLP with the dpo_trl image.
+#
+# Path discipline: the script resolves LGX_DIR from its own location, NOT from
+# a hardcoded absolute path. Guarantee required from the user: this file sits
+# at `lgx/hope_dir/jupyter.sh`, and everything under `lgx/` has consistent
+# sub-folder names (dpo-exp/, dataset/, checkpoints/, logs/, beacons/, ...).
+# The absolute path up to `lgx/` may differ between machines and we don't care.
+#
+# This file replaces the older heavy-instrumentation version — the new dpo_trl
+# image ships TRL 0.29.0 / DeepSpeed 0.18.9 / math-verify pre-baked, so we no
+# longer need to install them at runtime.
+
+set -uo pipefail
 export PATH=$PATH:~/.local/bin
 
-# ==================== Paths ====================
-LGX_DIR="/home/hadoop-ai-search/dolphinfs_ssd_hadoop-ai-search/yangfengkai02/lgx"
-WHEELS_DIR="${LGX_DIR}/dpo-wheels"
-export REPO_DIR="${LGX_DIR}/dpo-exp"
+# ==================== Resolve paths relative to this script ====================
+SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" 2>/dev/null && pwd)"
+if [ -z "${SCRIPT_DIR}" ]; then SCRIPT_DIR="$(pwd)"; fi
+# jupyter.sh lives at lgx/hope_dir/jupyter.sh → parent = hope_dir → parent of parent = lgx
+LGX_DIR="$(cd "${SCRIPT_DIR}/.." 2>/dev/null && pwd)"
+if [ -z "${LGX_DIR}" ]; then
+  echo "FATAL: could not resolve LGX_DIR from SCRIPT_DIR=${SCRIPT_DIR}"; exit 10
+fi
+
+REPO_DIR="${LGX_DIR}/dpo-exp"
+LOG_ROOT="${LGX_DIR}/logs"
+BEACON_ROOT="${LGX_DIR}/beacons"
 export USE_DOCKER=0
 
-# ==================== Dual logging (stdout + dolphinfs) ====================
-# Try two possible dolphinfs roots; use whichever is writable.
-LOG_ROOT=""
-for candidate in \
-    "${LGX_DIR}/logs" \
-    "/mnt/dolphinfs/ssd_pool/docker/user/hadoop-ai-search/yangfengkai02/lgx/logs"; do
-  if mkdir -p "${candidate}" 2>/dev/null && [ -w "${candidate}" ]; then
-    LOG_ROOT="${candidate}"
-    break
-  fi
-done
-if [ -z "${LOG_ROOT}" ]; then
-  LOG_ROOT="/tmp/dpo_logs"
-  mkdir -p "${LOG_ROOT}"
-  echo "WARN: dolphinfs log dirs not writable -- falling back to ${LOG_ROOT}"
-fi
+mkdir -p "${LOG_ROOT}" "${BEACON_ROOT}" 2>/dev/null || true
 TS=$(date +%Y%m%d_%H%M%S)
 LOG_FILE="${LOG_ROOT}/run_${TS}_$$.log"
-exec > >(tee -a "${LOG_FILE}") 2>&1
+if [ -w "${LOG_ROOT}" ]; then
+  exec > >(tee -a "${LOG_FILE}") 2>&1
+else
+  echo "WARN: ${LOG_ROOT} not writable; log is UI-only"
+fi
 
-# Save the final exit code so we can always log it even on script failure.
 trap 'rc=$?; echo "=== EXIT rc=${rc} at $(date -Is) ==="; exit ${rc}' EXIT
 
 echo "================================================================"
 echo "=== jupyter.sh start @ $(date -Is)"
+echo "=== LGX_DIR=${LGX_DIR}"
+echo "=== REPO_DIR=${REPO_DIR}"
 echo "=== LOG_FILE=${LOG_FILE}"
 echo "================================================================"
 
-# ==================== Section 1: Identity & host ====================
+# Beacon so we can confirm the launcher at least reached this point even if
+# the tee log on dolphinfs is slow to surface on the login machine.
+START_BEACON="${BEACON_ROOT}/launcher_start_$(hostname)_$(date +%s).txt"
+{
+  echo "launcher start at $(date -Is)"
+  echo "host: $(hostname)"
+  echo "log:  ${LOG_FILE}"
+} > "${START_BEACON}" 2>/dev/null || true
+
+# ==================== Environment snapshot ====================
 section() { echo; echo "---------- $1 ----------"; }
 
-section "identity"
-whoami || true
-id || true
-hostname || true
-uname -a || true
-cat /etc/os-release 2>/dev/null | head -10 || true
+section "identity / gpu / disk"
+whoami; id; hostname; uname -a
+which nvidia-smi >/dev/null 2>&1 && nvidia-smi || echo "WARN: no nvidia-smi on PATH"
+echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
+df -h /dev/shm / "${LGX_DIR}" 2>&1 | head -10
 
-# ==================== Section 2: AFO / platform env ====================
-section "afo/platform env"
-# Everything AFO-related in the environment -- jobId, role, task index, cluster spec, image, etc.
-env | grep -iE '^(AFO|HOPE|K8S|CONTAINER|HADOOP_USER|FS_CLIENT|HDFS|TF_CONFIG|LD_LIB|CUDA|NVIDIA)' | sort || true
-echo "---- TF_CONFIG ----"
-echo "${TF_CONFIG:-<unset>}"
-echo "---- AFO_ENV_CLUSTER_SPEC ----"
-echo "${AFO_ENV_CLUSTER_SPEC:-<unset>}"
-
-# ==================== Section 3: Hardware resources ====================
-section "cpu/mem"
-nproc || true
-echo "--- /proc/meminfo (top) ---"
-head -5 /proc/meminfo || true
-echo "--- cgroup mem limit ---"
-cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null \
-  || cat /sys/fs/cgroup/memory.max 2>/dev/null \
-  || echo "(no cgroup mem info)"
-echo "--- cgroup cpu quota ---"
-cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us 2>/dev/null \
-  || cat /sys/fs/cgroup/cpu.max 2>/dev/null \
-  || echo "(no cgroup cpu info)"
-echo "--- ulimits ---"
-ulimit -a || true
-
-section "gpu"
-which nvidia-smi && nvidia-smi || echo "WARN: no nvidia-smi on PATH"
-echo "--- CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>} ---"
-ls /dev/nvidia* 2>/dev/null || echo "(no /dev/nvidia* devices visible)"
-
-section "disk"
-df -h / /tmp "${LGX_DIR}" "${WHEELS_DIR}" "${REPO_DIR}" 2>&1 | head -40 || true
-echo "--- shm ---"
-df -h /dev/shm 2>&1 || true
-
-section "network"
-hostname -I 2>/dev/null || hostname -i || true
-# ip preferred over ifconfig on modern images
-(ip -br addr show 2>/dev/null || ifconfig -a 2>/dev/null) | head -30 || true
-
-# ==================== Section 4: Filesystem sanity ====================
-section "dolphinfs paths"
-for p in "${LGX_DIR}" "${WHEELS_DIR}" "${REPO_DIR}" \
-         "/mnt/dolphinfs/ssd_pool/docker/user/hadoop-ai-search/yangfengkai02/lgx" \
-         "/home/hadoop-ai-search/dolphinfs_ssd_hadoop-ai-search/yangfengkai02/lgx"; do
+# ==================== Dolphinfs sanity ====================
+section "dolphinfs assets"
+require() {
+  local p="$1"
   if [ -e "$p" ]; then
-    echo "OK   $p ($(stat -c '%U:%G %a' "$p" 2>/dev/null || echo '?'))"
-    ls -la "$p" 2>&1 | head -5
+    echo "  [OK]    $p"
   else
-    echo "MISS $p"
+    echo "  [MISS]  $p"
+    MISSING_ASSETS=1
   fi
-done
+}
+MISSING_ASSETS=0
+require "${REPO_DIR}"
+require "${REPO_DIR}/experiments/run_4b_code_m1_dpo_smoke.sh"
+require "${LGX_DIR}/checkpoints/qwen3-4b-base-code-sft-m1"
+require "${LGX_DIR}/dataset/code/code-train.jsonl"
+require "${LGX_DIR}/dataset/EnsembleLLM-data-processed/HumanEval/test.jsonl"
 
-section "wheels inventory"
-if [ -d "${WHEELS_DIR}" ]; then
-  ls -la "${WHEELS_DIR}" | head -30
-  echo "--- total wheel size ---"
-  du -sh "${WHEELS_DIR}" 2>/dev/null || true
-  echo "--- wheel count ---"
-  find "${WHEELS_DIR}" -name '*.whl' | wc -l
-else
-  echo "ERROR: WHEELS_DIR=${WHEELS_DIR} does not exist"
-fi
-
-section "repo inventory"
-if [ -d "${REPO_DIR}" ]; then
-  ls -la "${REPO_DIR}" | head -30
-  echo "--- git HEAD ---"
-  (cd "${REPO_DIR}" && git log -1 --oneline 2>&1 || true)
-else
-  echo "ERROR: REPO_DIR=${REPO_DIR} does not exist"
-fi
-
-# ==================== Section 5: Python & pip ====================
-section "python/pip"
-which python3 || echo "WARN: no python3"
-python3 --version 2>&1 || true
-which pip || echo "WARN: no pip"
-pip --version 2>&1 || true
-echo "--- sys.path ---"
-python3 -c 'import sys; [print(p) for p in sys.path]' 2>&1 || true
-echo "--- already installed (grep target pkgs) ---"
-pip list 2>/dev/null | grep -iE '^(vllm|trl|deepspeed|torch|transformers|accelerate|peft|datasets|flash-attn)' || echo "(none of target pkgs found yet)"
-
-# ==================== Section 6: cd into repo (fail loudly if missing) ====================
-section "cd to repo"
 if [ ! -d "${REPO_DIR}" ]; then
-  echo "FATAL: REPO_DIR=${REPO_DIR} not found -- cannot proceed"
-  exit 10
-fi
-cd "${REPO_DIR}"
-pwd
-ls -la | head -20
-
-# ==================== Section 7: Per-package dependency check ====================
-section "dependency check"
-# Never blindly overwrite image-shipped libs with wheels -- a vllm/torch ABI mismatch
-# is very hard to recover from. Check each target package individually and only
-# install what's actually missing.
-check() { python3 -c "import $1" 2>/dev/null; }
-
-for pkg in vllm trl transformers torch accelerate; do
-  if check "$pkg"; then
-    ver=$(python3 -c "import ${pkg}; print(${pkg}.__version__)" 2>/dev/null)
-    echo "  [present] ${pkg} == ${ver}"
-  else
-    echo "  [MISSING] ${pkg}"
-  fi
-done
-
-# Deepspeed is often absent from training images; install from internal mirror if so.
-if ! check deepspeed; then
-  echo "deepspeed missing, trying internal PyPI mirror ..."
-  pip install --no-cache-dir -i https://pypi.sankuai.com/simple deepspeed 2>&1 | tail -20 || true
-  if ! check deepspeed; then
-    echo "WARN: deepspeed install failed -- DPO step will likely fail, continuing for diagnostics."
-  else
-    python3 -c "import deepspeed; print('  deepspeed installed:', deepspeed.__version__)"
-  fi
-else
-  python3 -c "import deepspeed; print('  [present] deepspeed ==', deepspeed.__version__)"
+  echo "FATAL: repo not present at ${REPO_DIR} — nothing to run"; exit 11
 fi
 
-# ==================== Section 8: Jupyter (background) ====================
-section "jupyter"
-IPS=$(ifconfig -a 2>/dev/null | grep inet | grep -v 127.0.0.1 | grep -v inet6 | awk '{print $2}' | tr -d "addr:")
-IP=$(echo ${IPS} | awk '{print $1}')
-echo "IP=${IP}"
+# ==================== Dep import check (NO install) ====================
+# The dpo_trl image bakes in trl==0.29.0 / deepspeed==0.18.9 / math-verify etc.
+# If any import fails here the image is wrong, not the script — fail loudly.
+section "dep import check (image-baked)"
+python3 - <<'PY' || { echo "FATAL: required deps not importable"; exit 12; }
+import importlib, sys
+required = [
+    ("torch",          None),
+    ("vllm",           None),
+    ("transformers",   None),
+    ("trl",            "0.29.0"),
+    ("deepspeed",      "0.18.9"),
+    ("accelerate",     None),
+    ("datasets",       None),
+    ("math_verify",    None),
+]
+bad = 0
+for name, want in required:
+    try:
+        m = importlib.import_module(name)
+        ver = getattr(m, "__version__", "?")
+        tag = f"[OK]" if (want is None or ver == want) else f"[WARN ver={want}]"
+        print(f"  {tag:16s} {name} {ver}")
+        if want is not None and ver != want:
+            bad += 1
+    except Exception as e:
+        print(f"  [FAIL]           {name}: {e!r}")
+        bad += 1
+from trl import DPOConfig, DPOTrainer   # class-level smoke
+print(f"  [OK]             DPOConfig/DPOTrainer importable")
+sys.exit(0 if bad == 0 else 1)
+PY
+
+# ==================== Jupyter lab (background, optional interactive shell) ====================
+section "jupyter lab (background)"
 JUPYTER_LOG="${LOG_ROOT}/jupyter_${TS}.log"
-(python3 -m jupyter lab --ServerApp.token="oNya685" --port 8420 --ip "${IP}" \
+IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+echo "  IP=${IP:-<none>}  port=8420  token=oNya685"
+(python3 -m jupyter lab --ServerApp.token="oNya685" --port 8420 --ip "${IP:-0.0.0.0}" \
     > "${JUPYTER_LOG}" 2>&1) &
 JUPYTER_PID=$!
-echo "Jupyter PID=${JUPYTER_PID} log=${JUPYTER_LOG}"
+echo "  jupyter PID=${JUPYTER_PID}  log=${JUPYTER_LOG}"
 
-# ==================== Section 9: Run DPO ====================
-section "run DPO pipeline"
-echo "--> bash experiments/run_4b_code_sft_code.sh @ $(date -Is)"
-bash experiments/run_4b_code_sft_code.sh
+# ==================== Run DPO smoke ====================
+section "run DPO smoke pipeline"
+if [ "${MISSING_ASSETS}" -ne 0 ]; then
+  echo "WARN: some dataset/checkpoint assets are missing. run_code_dpo.sh"
+  echo "      preflight will fail loudly — that's expected until the user"
+  echo "      transfers the missing files into lgx/ via dolphinfs."
+fi
+cd "${REPO_DIR}"
+echo "--> bash experiments/run_4b_code_m1_dpo_smoke.sh @ $(date -Is)"
+bash experiments/run_4b_code_m1_dpo_smoke.sh
 DPO_RC=$?
-echo "--> DPO script exited with rc=${DPO_RC} @ $(date -Is)"
+echo "--> smoke exited rc=${DPO_RC} @ $(date -Is)"
+
+DONE_BEACON="${BEACON_ROOT}/launcher_done_$(hostname)_$(date +%s).txt"
+echo "launcher done rc=${DPO_RC} at $(date -Is)" > "${DONE_BEACON}" 2>/dev/null || true
 
 wait

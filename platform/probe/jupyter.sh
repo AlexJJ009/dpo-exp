@@ -14,17 +14,30 @@
 set -uo pipefail
 set -x
 
-LGX_DIR="/home/hadoop-ai-search/dolphinfs_ssd_hadoop-ai-search/yangfengkai02/lgx"
-ALT_DIR="/mnt/dolphinfs/ssd_pool/docker/user/hadoop-ai-search/yangfengkai02/lgx"
-REPO_DIR_GUESS="${LGX_DIR}/dpo-exp"
-
-# Pick a writable log dir on dolphinfs; fall back to /tmp.
-LOG_ROOT=""
-for candidate in "${LGX_DIR}/logs" "${ALT_DIR}/logs"; do
-  if mkdir -p "${candidate}" 2>/dev/null && [ -w "${candidate}" ]; then
-    LOG_ROOT="${candidate}"; break
+# Resolve LGX_DIR relative to this script's location. The probe must not
+# assume the absolute path up to lgx/ — only that this file sits at
+# lgx/hope_dir/probe/jupyter.sh (or lgx/hope_dir/jupyter.sh on some layouts).
+# We walk up one directory at a time until we find the lgx/ anchor by sibling
+# presence of `dpo-exp/` or `hope_dir/`.
+SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" 2>/dev/null && pwd)"
+if [ -z "${SCRIPT_DIR}" ]; then SCRIPT_DIR="$(pwd)"; fi
+LGX_DIR=""
+candidate="${SCRIPT_DIR}"
+for _ in 1 2 3 4; do
+  candidate="$(cd "${candidate}/.." 2>/dev/null && pwd)" || break
+  if [ -d "${candidate}/dpo-exp" ] || [ -d "${candidate}/hope_dir" ]; then
+    LGX_DIR="${candidate}"; break
   fi
 done
+if [ -z "${LGX_DIR}" ]; then LGX_DIR="$(cd "${SCRIPT_DIR}/.." 2>/dev/null && pwd)"; fi
+REPO_DIR_GUESS="${LGX_DIR}/dpo-exp"
+
+# Pick a writable log dir; fall back to /tmp. LGX_DIR is the only anchor.
+LOG_ROOT=""
+if mkdir -p "${LGX_DIR}/logs" 2>/dev/null && [ -w "${LGX_DIR}/logs" ]; then
+  LOG_ROOT="${LGX_DIR}/logs"
+fi
 [ -z "${LOG_ROOT}" ] && { LOG_ROOT="/tmp/probe_logs"; mkdir -p "${LOG_ROOT}"; }
 TS=$(date +%Y%m%d_%H%M%S)
 LOG_FILE="${LOG_ROOT}/probe_${TS}_$$.log"
@@ -205,7 +218,7 @@ check_path() {
 }
 # Repo + dataset — needed for real runs, not for proving the image.
 check_path "${REPO_DIR_GUESS}"                                               optional
-check_path "${REPO_DIR_GUESS}/experiments/run_4b_code_m1_dpo.sh"             optional
+check_path "${REPO_DIR_GUESS}/experiments/run_4b_code_m1_dpo_smoke.sh"       optional
 check_path "${LGX_DIR}/dataset/code/code-train.jsonl"                        optional
 check_path "${LGX_DIR}/dataset/EnsembleLLM-data-processed/HumanEval/test.jsonl"    optional
 check_path "${LGX_DIR}/dataset/EnsembleLLM-data-processed/MBPP/test.jsonl"         optional
@@ -229,20 +242,18 @@ fi
 
 # ==================== H. dolphinfs beacon ====================
 section "H. beacon"
-for D in "${LGX_DIR}" "${ALT_DIR}"; do
-  if [ -d "$D" ]; then
-    mkdir -p "$D/beacons" 2>/dev/null || true
-    BEACON="$D/beacons/probe_$(hostname)_$(date +%s).txt"
-    {
-      echo "probe alive at $(date -Is)"
-      echo "image: dpo_trl_8071ad6f:1.0.0"
-      echo "host:  $(hostname)"
-      echo "fails: ${#FAILS[@]}"
-      echo "log:   ${LOG_FILE}"
-    } > "$BEACON" 2>&1 && record_ok "beacon written: $BEACON"
-    break
-  fi
-done
+if [ -d "${LGX_DIR}" ]; then
+  mkdir -p "${LGX_DIR}/beacons" 2>/dev/null || true
+  BEACON="${LGX_DIR}/beacons/probe_$(hostname)_$(date +%s).txt"
+  {
+    echo "probe alive at $(date -Is)"
+    echo "image: dpo_trl (see run.hope)"
+    echo "host:  $(hostname)"
+    echo "LGX_DIR: ${LGX_DIR}"
+    echo "fails: ${#FAILS[@]}"
+    echo "log:   ${LOG_FILE}"
+  } > "${BEACON}" 2>&1 && record_ok "beacon written: ${BEACON}"
+fi
 
 # ==================== SUMMARY ====================
 section "SUMMARY"

@@ -2,189 +2,87 @@
 
 Last updated: 2026-04-17. Written as a handoff so work can continue from another machine.
 
-> **2026-04-17 status update.** We have a custom-built image that fully passes the probe
-> smoke suite and is ready for real DPO runs:
-> `registry-offlinebiz.sankuai.com/custom_prod/com.sankuai.data.hadoop.gpu/ai-search/training_ubuntu22_cuda12.8_python3.12_torch2.8_dpo_trl_174de81b:1.0.0`.
-> Both `platform/run.hope` and `platform/probe/run.hope` point at it. The hard-won image-build
-> lessons from the 2026-04-14 → 2026-04-17 cycle are collected in the **Image-build playbook**
-> appendix at the bottom — read that first when building the next image (e.g. the verl image
-> at `/data-1/verl07/verl`).
+> **Current state.** Custom image `...ai-search/training_ubuntu22_cuda12.8_python3.12_torch2.8_dpo_trl_174de81b:1.0.0` is built, pushed, and validated by `platform/probe/` (all checks [OK], rc=0). `platform/run.hope` points at it and is configured for a 2-GPU smoke run of the existing code-DPO experiment via `experiments/run_4b_code_m1_dpo_smoke.sh`. The next image to build is the verl image for `/data-1/verl07/verl` — follow the Image-build playbook appendix at the bottom.
 
 ## Context
 
-- Goal: run the DPO pipeline (`experiments/run_4b_code_sft_code.sh`) on Meituan MLP via `ml-easy-job`.
+- Goal: run the DPO pipeline on Meituan MLP via `ml-easy-job`.
 - Queue: `root.shxs_training_cluster.hadoop-fridayagi.friday_h20_train`
 - Hadoop account: `hadoop-ai-search`, MIS user: `yangfengkai02`
 - Submission client host: `set-zw06-mlp-codelab-pc178`
 - Dolphinfs base (primary): `/mnt/dolphinfs/ssd_pool/docker/user/hadoop-ai-search/yangfengkai02/lgx/`
 - Dolphinfs base (symlink): `/home/hadoop-ai-search/dolphinfs_ssd_hadoop-ai-search/yangfengkai02/lgx/`
-- Key paths inside `lgx/`:
-  - `dpo-exp/` — git repo
-  - `dpo-wheels/` — pre-built offline wheels (vLLM 0.12.0, TRL 0.29.0, DeepSpeed 0.18.9, ...)
-  - `hope_dir/` — submission staging dir (where `hope run run.hope` is invoked)
-  - `logs/` — created on first run by `jupyter.sh` (tee output)
-  - `beacons/` — per-step beacon files from `jupyter_min.sh`
+- **Path guarantee.** Everything under `lgx/` has consistent sub-folder names across machines; the absolute prefix up to `lgx/` may differ. **All scripts must derive `LGX_DIR` from their own location, never hardcode the absolute path.** See `platform/jupyter.sh` for the pattern.
+- Key paths under `lgx/`:
+  - `dpo-exp/` — git repo (this)
+  - `dpo-wheels/` — pre-built offline wheels (legacy, not needed for the new image)
+  - `hope_dir/` — submission staging dir; `cp platform/*.sh platform/*.hope` targets
+  - `logs/` — created on first run by `jupyter.sh`
+  - `beacons/` — launcher start/done beacons
+  - `dataset/` — training & eval data (user transfers via dolphinfs)
+  - `checkpoints/` — model weights (user transfers via dolphinfs)
 
-## Current state (as of commit `40776ce1`)
+## MLP / AFO quirks that still bite
 
-- `platform/run.hope` points to the **training_codelab image** from shangou-alg team
-  (`...shangou-alg_training_codelab_ubuntu22_cuda12.8_python3.12_torch2.8_trl_1.0.0_a0523d07:1.0.0`).
-  Proven AFO-compatible: has 2 active tasks on the platform today, visibility=全员.
-- Single-GPU config for debugging: `worker.gcoresh20-141g = 1`, memory 240GB, 16 vcore,
-  SHM 64GB. Raise back to 8 GPU / 1875GB / 128 vcore for real training.
-- `platform/jupyter.sh` is the heavily instrumented launcher (9 sections, see below).
-  Section 7 does per-package dependency checks and only installs missing deepspeed from
-  the internal PyPI mirror. It does NOT overwrite image-shipped libs.
-
-## Known issues (and how to handle)
-
-### 1. sglang_dev image is NOT AFO-compatible (avoid)
-Old image `training_codelab_lmsysorg_sglang_dev_19d35de6:1.0.0` fails early in
-`docker-run.sh` with `su: Authentication failure`. Worker never reaches our
-`bash jupyter.sh`. Manifested as exit code 1 with empty dolphinfs logs.
-**Fix:** use the training_codelab image instead.
-
-### 2. hope_dir files go stale
-`hope_dir/run.hope` and `hope_dir/jupyter.sh` do NOT auto-update when you `git pull`
-in `dpo-exp/`. Forgetting to `cp` leaves AFO running an old version — we lost
-hours to this. Always run:
+### hope_dir files go stale
+`hope_dir/run.hope` and `hope_dir/jupyter.sh` do NOT auto-update when you `git pull` in `dpo-exp/`. Always re-copy and sanity-check before resubmitting:
 
 ```bash
 cd $LGX/dpo-exp && git pull
-cp platform/jupyter.sh platform/run.hope $LGX/hope_dir/
-# Sanity check before submitting:
-wc -l $LGX/hope_dir/jupyter.sh          # must match repo
-md5sum $LGX/hope_dir/jupyter.sh $LGX/dpo-exp/platform/jupyter.sh
-grep afo.docker.image.name $LGX/hope_dir/run.hope   # verify image
+cp platform/run.hope platform/jupyter.sh \
+   platform/probe/run.hope platform/probe/jupyter.sh \
+   $LGX/hope_dir/
+md5sum $LGX/hope_dir/*.sh $LGX/hope_dir/*.hope
+grep afo.docker.image.name $LGX/hope_dir/run.hope          # verify image
+grep afo.docker.image.name $LGX/hope_dir/probe/run.hope 2>/dev/null || true
 ```
 
-### 3. Platform UI hides the Worker log under "driver" role
-Job detail → 实例 → Worker row → 日志: the role dropdown defaults to `driver`, which
-does not exist for `ml-easy-job`. Switch to `worker`. Same for `更多 ▾` menu —
-often only "容错" is shown; click into attempts to see failure reasons.
+### Platform UI hides the Worker log under "driver"
+Job detail → 实例 → Worker row → 日志: the role dropdown defaults to `driver`, which does not exist for `ml-easy-job`. Switch to `worker`. Same for `更多 ▾` menu — often only "容错" is shown; click into attempts to see failure reasons.
 
-### 4. Pod Events not directly accessible
-The UI does not expose `kubectl describe pod`-style events. Two workarounds:
-- Search the AM log for `PodChangeMonitor update:` lines — they contain
-  `reason=<...>` and `message=<...>` which tell you why worker failed.
-- Ask platform ops (search 大象/飞书 for "MLP 支持" / "AFO 运维") to run
-  `kubectl describe pod <jobId>-worker-0 -n hadoop-fridayagi`.
+### Pod Events are not directly accessible
+No `kubectl describe pod`-style UI. Two workarounds:
+- Search the AM log for `PodChangeMonitor update:` lines — they contain `reason=<...>` and `message=<...>` explaining why worker failed.
+- Ask platform ops (search 大象/飞书 for "MLP 支持" / "AFO 运维") to run `kubectl describe pod <jobId>-worker-0 -n hadoop-fridayagi`.
 
-### 5. ConfigParser in hope is intolerant
-- Non-ASCII chars (esp. U+2014 em-dash `—`) in `run.hope` crash `configparser`.
-  Everything should be pure ASCII. Use `--` or `-` instead.
-- `#` comments inside `[docker]` section triggered parsing errors once. Safest:
-  no comments at all in `run.hope`.
+### run.hope / ConfigParser is intolerant
+- Non-ASCII chars (esp. U+2014 em-dash `—`) crash `configparser`. Stick to pure ASCII. Use `--` or `-` instead.
+- `#` comments inside a section once triggered parsing errors. Safest: no comments at all in `run.hope`.
 
-### 6. jobId URL must not have trailing quote
-A URL like `.../jobId=psx6jd9xrjzmgsfz%22` (`%22` is `"`) gives spurious 500s —
-the trailing quote came from a copy-paste. Type the jobId cleanly in the URL bar.
+### jobId URL must not have trailing quote
+A URL like `.../jobId=psx6jd9xrjzmgsfz%22` (`%22` is `"`) gives spurious 500s — the trailing quote came from a copy-paste. Type the jobId cleanly.
 
-### 7. Image pulls can be slow but finite
-Non-cached ~30GB images take 10-30 min on first pull. 4+ days stuck = NOT slow
-pull, it's `ErrImagePull` / `ImagePullBackOff` (registry prefix missing, wrong
-tag, wrong repo hash). Check the image name in `run.hope` very carefully.
+### Image pulls can be slow but finite
+Non-cached ~30GB images take 10-30 min on first pull. **4+ days stuck = NOT slow pull**, it's `ErrImagePull` / `ImagePullBackOff` (registry prefix missing, wrong tag, wrong repo hash). Check the image name in `run.hope` character-by-character.
 
-### 8. Library versions in the new image
-The training_codelab image ships (as of 2026-02-17 build):
-- python 3.12.11, cuda 12.8, torch 2.8.0+cu128
-- vllm 0.10.2, transformers 4.57.1, sglang 0.5.4, ray 2.50.0
-- trl (via `uv pip install trl[liger,peft,vlm]`, version unpinned at build time)
-- **deepspeed NOT included** — jupyter.sh installs it from `pypi.sankuai.com`
-- User wants "latest" TRL, which is what the image already has
-
-If the code targets a different vllm/trl version, either (a) patch the code to
-the image versions, or (b) rebuild a custom image FROM this one with pinned
-wheels. Do NOT `pip install --force-reinstall` vllm or torch into the running
-container — torch ABI mismatches are brutal to debug.
-
-## Diagnostic toolkit
-
-### a) `platform/jupyter.sh` — main launcher (188 lines, 9 sections)
-
-- Line 14-28: discovers a writable log root, mirrors stdout/stderr there with `tee`
-- Line 30: `trap EXIT` always prints the final rc
-- Sections 1-6: identity, AFO env, cpu/mem, gpu, disk, network, dolphinfs paths,
-  wheels inventory, repo inventory, python/pip
-- Section 7: per-package check (vllm/trl/transformers/torch/accelerate) then
-  optional deepspeed install from internal mirror
-- Section 8: jupyter in background (token `oNya685`, port 8420)
-- Section 9: `bash experiments/run_4b_code_sft_code.sh`, prints rc
-
-Fails loudly on known issues:
-- `exit 10` if `REPO_DIR` missing
-- `exit 11` if wheels dir is empty when we need them
-
-### b) `platform/probe/` — minimum-image probe
-
-Separate submission to rule out platform-side issues vs image issues.
-Uses a different small image (originally tf1.10, but note that image's
-`su: Authentication failure` also breaks — useful negative result).
-
-### c) `platform/jupyter_min.sh` — beacon diagnostic
-
-Writes per-step beacon files to `${LGX_DIR}/beacons/beacon_<TS>_<step>`:
-- `00_started` — shebang + mkdir worked
-- `01_identity`, `02_env`, `03_mounts`, `04_gpu`, `05_python`
-- `99_done` — all steps completed
-
-If only `00_started` exists, the script died on the first section (most likely
-mounts or env). If `99_done` exists but main `jupyter.sh` still fails, the
-problem is specifically in section 7+ of the full launcher.
+### Login-machine dolphinfs view can lag / diverge
+Observed 2026-04-17: container wrote `beacons/probe_*.txt` and `logs/probe_*.log` successfully (visible in UI "运行日志"), but the login machine `set-zw06-mlp-codelab-pc178` showed neither file 10+ min later; `find /mnt/dolphinfs ...` hung. **MLP UI "运行日志" is the authoritative output stream.** Absence of a file on the login machine does not prove the container didn't write it.
 
 ## Useful commands on the submission client
 
 ```bash
 # Always stop orphans before resubmitting — they eat queue quota
 hope killjob <run_id>
-hope killjob 47844274   # (older runs)
 
 # Submit
-cd $LGX/hope_dir && hope run run.hope
+cd $LGX/hope_dir && hope run run.hope             # main
+cd $LGX/hope_dir && hope run probe/run.hope       # probe (validate image first)
 
-# Check results after 5-10 min
+# Check results after 5-15 min
 ls -lat $LGX/logs/
 ls -lat $LGX/beacons/
 tail -300 $(ls -t $LGX/logs/run_*.log | head -1)
 ```
 
-## Failure timeline (chronological, newest first)
+## Failure timeline (lessons we paid for)
 
-| Job ID | Image | Outcome | Lesson |
-|---|---|---|---|
-| `psx5hf4xrk5ssjk8` | sglang_dev_19d35de6:1.0.0, 1 GPU | 3x fail exit=1, `su: Authentication failure` in docker-run.sh | sglang image not AFO-compatible → switch image |
-| `psx5h9nxrk5sv7fh` | sglang_dev_19d35de6:1.0.0, 8 GPU | fail exit=1 | same image issue, plus queue 6 H20 short |
-| `psx6jd9xrjzmgsfz` | sglang_dev:1.0.0 (no hash suffix, no registry prefix) | 4 days stuck "资源已分配" | ImagePullBackOff — wrong image name (no registry + wrong repo hash) |
-| DPO-Probe (tf1.10) | hadoop-hadoop_tf1.10_mt1.0.4:... | exit=2 failover | tf1.10 is a board-viewer image, not a general worker base |
-| image build #1 (`dpo_trl_8071ad6f`) | FROM `phxmlp.mtjupyter.singleuser/...verl_megatron_1.0.2_534ef92c` | build OK, push 3x retry then `MANIFEST_BLOB_UNKNOWN: sha256:4f4fb700...` | cross-namespace blob cross-mount denied; retry / rename didn't help |
-| image build #2 (`dpo_trl_174de81b`) | same FROM, same Dockerfile, **advanced params `--build-on-machine --no-cache`** | push succeeds after 2-3 internal kaniko retries | `--no-cache` forces fresh upload → no cross-mount; `--build-on-machine` fixes registry egress. **Playbook verified — use this combo from the start next time.** |
-| DPO-Probe-newimage (174de81b) | `ai-search/...dpo_trl_174de81b:1.0.0` on 1×H20 | probe passed: `ALL PROBE CHECKS PASSED`, rc=0 | new image validated end-to-end for DPO + vLLM imports, CUDA kernel, HF_HUB_OFFLINE tokenizer load |
-
-## Next steps (pick up here on the other machine)
-
-1. On the other machine: `git pull` in `dpo-exp/`, then `cp platform/jupyter.sh
-   platform/run.hope hope_dir/` (see section "hope_dir files go stale").
-2. Submit with training_codelab image. Expect: container starts within 5-15
-   min, jupyter.sh runs, Section 1-8 debug lands in `$LGX/logs/run_*.log`.
-3. Section 9 (DPO training) will probably OOM or mis-count processes on 1
-   GPU — that's expected. Confirm full debug log is available, then scale
-   resources back up in `run.hope`:
-   ```ini
-   worker.memory = 1920000
-   worker.vcore = 128
-   worker.gcoresh20-141g = 8
-   ```
-   and bump `YARN_CONTAINER_RUNTIME_DOCKER_SHM_SIZE_BYTES` back to `549755813888`.
-4. If library versions in the image don't match what `run_4b_code_sft_code.sh`
-   expects (e.g. `from trl import ...` API changes), decide between:
-   - Patching the code to the image's TRL / vLLM versions (fast)
-   - Requesting a custom image from codelab team (clean but slow)
-   - Installing our wheels on top (risky, torch ABI mismatch likely)
-
-   **Update 2026-04-17:** this step is now unnecessary for DPO — the new
-   `dpo_trl_174de81b:1.0.0` image bakes in the correct TRL 0.29.0 / DeepSpeed 0.18.9 /
-   math-verify stack. Section 7 of `jupyter.sh` (runtime pip install) is now redundant and
-   can be simplified to an import-only check.
+| Image / attempt | Outcome | Lesson |
+|---|---|---|
+| sglang_dev_19d35de6:1.0.0 | `su: Authentication failure` in docker-run.sh; worker never reaches our script | Not every MLP-visible image is AFO-compatible; test with a probe first. |
+| sglang_dev:1.0.0 (no registry prefix) | 4 days stuck "资源已分配" | `ImagePullBackOff` masked as slow scheduling. Full registry path + exact tag is required. |
+| image build #1 `dpo_trl_8071ad6f` | build OK, push fails 3× with `MANIFEST_BLOB_UNKNOWN: sha256:4f4fb700...` | Cross-namespace blob cross-mount denied when base lives in `phxmlp.mtjupyter.singleuser/*` and target is `data.hadoop.gpu/ai-search/*`. Retry / rename tricks don't help. |
+| image build #2 `dpo_trl_174de81b` | push succeeds after 2-3 internal kaniko retries | Advanced params `--build-on-machine --no-cache` force fresh upload to target namespace → no cross-mount. **Use these params from the start next time.** |
+| DPO-Probe-newimage (174de81b) | `ALL PROBE CHECKS PASSED`, rc=0 | Image validated end-to-end (TRL 0.29.0 / DeepSpeed 0.18.9 / math-verify / CUDA kernel / HF_HUB_OFFLINE tokenizer load). |
 
 ---
 
@@ -305,17 +203,13 @@ The probe covers:
 
 ≤5 min on 1 GPU. Do **not** skip. Expected output on success: `ALL PROBE CHECKS PASSED` + rc=0.
 
-## Step 6 — Stale-copy + dolphinfs hazards
+## Step 6 — Path discipline in launcher scripts
 
-- **`hope_dir/` does NOT auto-sync** with the repo. After every `git pull`:
-  ```bash
-  cp platform/run.hope platform/probe/run.hope \
-     platform/jupyter.sh platform/probe/jupyter.sh \
-     $LGX/hope_dir/
-  md5sum $LGX/hope_dir/*.sh $LGX/hope_dir/*.hope    # sanity
-  ```
-- **Login-machine dolphinfs view can be extremely laggy or even diverge from the container view.**
-  Observed 2026-04-17: container wrote `beacons/probe_*.txt` and `logs/probe_*.log` successfully (visible in UI `运行日志`), but the login machine `set-zw06-mlp-codelab-pc178` showed neither file 10+ min later; `find /mnt/dolphinfs ...` hung. Lesson: **MLP UI "运行日志" is the authoritative output stream. Absence of a file on the login machine does not prove the container didn't write it.** For real results, rely on UI logs first; treat dolphinfs files as best-effort persistence.
+Only the folder layout under `lgx/` is guaranteed consistent — the absolute prefix up to `lgx/` may differ across machines. So:
+
+- `scripts/config.sh` auto-resolves `REPO_DIR = $(cd "${_CONFIG_DIR}/.." && pwd)` → `BASE_DIR = parent of REPO_DIR`. All dataset / checkpoint paths derive from there. No machine-specific overrides needed.
+- `platform/jupyter.sh` resolves `LGX_DIR` from `$(dirname ${BASH_SOURCE[0]})/..` — assumes it sits at `lgx/hope_dir/jupyter.sh`. **Do not reintroduce hardcoded `/home/hadoop-ai-search/...` absolute paths.** The `cp platform/jupyter.sh $LGX/hope_dir/` convention preserves the sibling relationship.
+- Experiment wrappers (`experiments/run_*.sh`) use `source "$(dirname "$0")/../scripts/config.sh"` — same auto-detection.
 
 ## Step 7 — Pre-flight for the next image (verl, `/data-1/verl07/verl`)
 

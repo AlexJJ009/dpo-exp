@@ -1,5 +1,5 @@
 [base]
-afo.app.name = DPO-Code-4B-debug-1gpu
+afo.app.name = DPO-Code-4B-M1-smoke-2gpu
 type = ml-easy-job
 
 [resource]
@@ -8,9 +8,9 @@ queue = root.shxs_training_cluster.hadoop-fridayagi.friday_h20_train
 
 [roles]
 workers = 1
-worker.memory = 240000
-worker.vcore = 16
-worker.gcoresh20-141g = 1
+worker.memory = 480000
+worker.vcore = 32
+worker.gcoresh20-141g = 2
 
 worker.script = bash jupyter.sh
 

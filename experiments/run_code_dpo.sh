@@ -172,33 +172,30 @@ print(f\"  Dataset: {s['dataset_size']} | Steps: {r['total_steps']} | Loss: {r['
   fi
 
   # ---- Step 4: Code Evaluation ----
+  # Uses dpo_pipeline/eval_code/eval_code_all.sh — the fixed launcher that
+  # dispatches per benchmark (HE/HE+/MBPP/MBPP+ via evalplus, BCB via
+  # eval_vllm_code.py, LCB via eval_vllm_livecodebench.py) with thinking=True
+  # default and correct SYSTEM_PROMPT handling.
   echo ""
   echo "=== STEP 4/4: Code Evaluation ==="
 
-  local eval_done=true
-  for tf in ${EVAL_TEST_FILES}; do
-    local ds_name; ds_name=$(basename "${tf}" .jsonl); ds_name=$(basename "${ds_name}" .json)
-    [ ! -f "${CHECKPOINT_DIR}/eval_code/${ds_name}/eval_summary.json" ] && eval_done=false && break
-  done
+  local EVAL_OUT="${CHECKPOINT_DIR}/eval_code"
+  local EVAL_DONE_MARKER="${EVAL_OUT}/.done"
 
-  if [ "${eval_done}" = true ]; then
-    echo ">>> SKIP: Evaluation already completed"
+  local EVAL_BENCH="${EVAL_BENCHMARKS:-humaneval mbpp bigcodebench livecodebench}"
+  if [ "${EVAL_BENCH}" = "none" ]; then
+    echo ">>> SKIP: EVAL_BENCHMARKS=none"
+  elif [ -f "${EVAL_DONE_MARKER}" ]; then
+    echo ">>> SKIP: Evaluation already completed (${EVAL_DONE_MARKER})"
   else
-    for tf in ${EVAL_TEST_FILES}; do
-      local ds_name; ds_name=$(basename "${tf}" .jsonl); ds_name=$(basename "${ds_name}" .json)
-      local eval_out="${CHECKPOINT_DIR}/eval_code/${ds_name}"
-      [ -f "${eval_out}/eval_summary.json" ] && echo ">>> SKIP: ${ds_name}" && continue
-
-      echo "--- Evaluating: ${ds_name} ---"
-      run_cmd python dpo_pipeline/eval_vllm_code.py \
-        --dataset "${tf}" \
-        --model "${CHECKPOINT_DIR}" \
-        --tp ${EVAL_TP} \
-        --max_model_len ${EVAL_MAX_TOKENS} \
-        --timeout ${EVAL_TIMEOUT} \
-        --repeat ${EVAL_REPEAT} \
-        --out_dir "${eval_out}"
-    done
+    mkdir -p "${EVAL_OUT}"
+    run_cmd_env \
+      "-e PY=/opt/venv/bin/python -e TP=${EVAL_TP} -e MAX_LEN=${EVAL_MAX_TOKENS} -e HF_HOME=${CACHE_DIR}/huggingface -v /root/.cache/evalplus:/root/.cache/evalplus" \
+      bash dpo_pipeline/eval_code/eval_code_all.sh \
+        "${CHECKPOINT_DIR}" \
+        "${EVAL_OUT}" \
+        ${EVAL_BENCH}
+    touch "${EVAL_DONE_MARKER}"
     echo ">>> Step 4 complete"
   fi
 
